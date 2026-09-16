@@ -1,0 +1,53 @@
+---
+description: React 18 + TypeScript + Tailwind CSS conventions
+globs: "**/*.{tsx,ts}"
+alwaysApply: false
+---
+
+# React 18 + TypeScript + Tailwind
+
+## Stack
+
+- Use **React 18**, **TypeScript**, and **Tailwind CSS**.
+- Prefer functional components; do not introduce class components.
+
+## Styling
+
+- Style with Tailwind utility classes first.
+- Avoid inline `style={{ ... }}` unless a value cannot be expressed with Tailwind (e.g. dynamic runtime values).
+
+```tsx
+// ❌ BAD
+<button style={{ padding: '8px 16px', backgroundColor: '#2563eb' }}>Save</button>
+
+// ✅ GOOD
+<button className="bg-blue-600 px-4 py-2 text-white">Save</button>
+```
+
+## Components + JSDoc
+
+- Export functional components typed with TypeScript.
+- Add a JSDoc comment describing the component’s purpose (and notable props when non-obvious).
+
+```tsx
+type ButtonProps = {
+  label: string;
+  onClick: () => void;
+};
+
+/**
+ * Primary action button.
+ * Uses Tailwind classes for layout and color.
+ */
+export function Button({ label, onClick }: ButtonProps) {
+  return (
+    <button
+      type="button"
+      className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+```
