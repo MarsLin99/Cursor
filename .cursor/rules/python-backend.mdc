@@ -1,0 +1,58 @@
+---
+description: Python 後端開發規則與最佳實務
+globs: "*.py"
+alwaysApply: false
+---
+
+# Python 後端開發規範
+
+## 1. 程式碼風格與架構
+
+- 遵循 **PEP 8**。
+- 所有函式參數與回傳值都必須使用 **Type Hints**。
+- 若使用 FastAPI，I/O 密集任務採用非同步（`async def`）。
+
+```python
+# ❌ BAD
+def get_user(id):
+    ...
+
+# ✅ GOOD
+async def get_user(user_id: int) -> User:
+    ...
+```
+
+## 2. 錯誤處理與驗證
+
+- 使用 **Pydantic** 進行資料驗證與解析。
+- 捕捉具體例外，禁止空白的 `except:`。
+- API 錯誤回傳標準化格式（例如 `detail` / `code`）。
+
+```python
+# ❌ BAD
+try:
+    data = parse(payload)
+except:
+    pass
+
+# ✅ GOOD
+try:
+    data = UserCreate.model_validate(payload)
+except ValidationError as exc:
+    raise HTTPException(status_code=422, detail=exc.errors()) from exc
+```
+
+## 3. 資料庫與安全
+
+- 嚴禁硬編碼密碼或金鑰；一律使用環境變數（`pydantic-settings` 或 `os.getenv`）。
+- 資料庫查詢必須透過 ORM（如 SQLAlchemy、Tortoise ORM）的參數化／防注入寫法。
+
+```python
+# ❌ BAD
+password = "super-secret"
+session.execute(f"SELECT * FROM users WHERE id = {user_id}")
+
+# ✅ GOOD
+password = settings.db_password  # from pydantic-settings / env
+session.execute(select(User).where(User.id == user_id))
+```
