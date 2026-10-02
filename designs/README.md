@@ -16,3 +16,16 @@
 | `f-mix-carport-tight.jpg` | F混搭・深簷格柵（緊湊） |
 | `f-mix-carport-steel-mesh.jpg` | F混搭・穿孔金屬罩 |
 | `f-mix-carport-angle.jpg` | F混搭・斜角木梁遮陽 |
+
+## L 型（F1／F4 風格・僅固定車位遮陽）
+
+| 檔名 | 說明 |
+|------|------|
+| `f-l-lattice-1car-shade.jpg` | L 型・木格子單車遮陽 |
+| `f-l-angle-1car-shade.jpg` | L 型・木梁斜角遮陽 |
+| `f-l-street-tight.jpg` | L 型・臨街緊湊 |
+| `f-l-dusk-lattice.jpg` | L 型・黃昏 |
+| `f-l-court-view.jpg` | L 型・從內庭看出 |
+| `f-l-aerial-util.jpg` | L 型鳥瞰 |
+| `f-l-compact-clear.jpg` | L 型・一遮一露清楚區分 |
+| `f-l-aerial-tight.jpg` | L 型緊湊鳥瞰 |
