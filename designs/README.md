@@ -29,3 +29,9 @@
 | `f-l-aerial-util.jpg` | L 型鳥瞰 |
 | `f-l-compact-clear.jpg` | L 型・一遮一露清楚區分 |
 | `f-l-aerial-tight.jpg` | L 型緊湊鳥瞰 |
+
+## 四面＋俯視（鎖定款）
+
+以約 **10×11m／105㎡** 重繪。V1＝木格子遮陽；V4＝木梁斜角遮陽。皆僅固定 1 席遮陽，靈活空間露天。
+
+`designs/elevations/`：`v1|v4` × `south/west/east/north/aerial`
