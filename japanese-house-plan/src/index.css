@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #1c1917;
+  --ink-soft: #44403c;
+  --paper: #f7f4ef;
+  --paper-deep: #ebe4d8;
+  --wood: #8b6914;
+  --wood-deep: #5c4a1f;
+  --moss: #4a5d3a;
+  --moss-soft: #6b7f56;
+  --charcoal: #2f2a26;
+  --stone: #a8a29e;
+  --sky: #d4dde3;
+  --accent: #6b7f56;
+  --serif: "Noto Serif TC", "Songti TC", serif;
+  --sans: "Noto Sans TC", "PingFang TC", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: var(--sans);
+  color: var(--ink);
+  background:
+    radial-gradient(ellipse 120% 80% at 10% -10%, #e8efe4 0%, transparent 50%),
+    radial-gradient(ellipse 90% 60% at 100% 0%, #e2ebe8 0%, transparent 45%),
+    linear-gradient(180deg, #f3f0ea 0%, #ebe6dc 40%, #e5e0d6 100%);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--moss) 28%, white);
+}
+
+.font-display {
+  font-family: var(--serif);
+}
+
+.plan-grid {
+  background-image:
+    linear-gradient(to right, rgb(120 113 108 / 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(120 113 108 / 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
