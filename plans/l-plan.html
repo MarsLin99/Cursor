@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>L型平面｜建蔽用滿約19.2坪</title>
+  <style>
+    :root {
+      --ink: #1c1917; --muted: #57534e; --build: #d6b98c; --court: #9caf88;
+      --eave: #e8d9b8; --park: #c5ccd1; --flex: #ddd6c8; --paper: #faf8f4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Noto Sans TC", "PingFang TC", sans-serif; color: var(--ink);
+      background: linear-gradient(180deg, #efebe3, #e5e0d6); padding: 24px;
+    }
+    h1 { font-family: "Noto Serif TC", serif; font-size: 1.75rem; margin: 0 0 8px; }
+    h2 { font-family: "Noto Serif TC", serif; font-size: 1.25rem; margin: 0 0 12px; }
+    .lead { color: var(--muted); max-width: 800px; line-height: 1.65; margin-bottom: 18px; }
+    .grid { display: grid; gap: 20px; grid-template-columns: 1fr; }
+    @media (min-width: 960px) { .grid { grid-template-columns: 1fr 1fr; } }
+    .card { background: var(--paper); border: 1px solid #d6d3d1; padding: 16px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 13px; margin: 12px 0; color: var(--muted); }
+    .swatch { width: 14px; height: 14px; display: inline-block; border: 1px solid #78716c; margin-right: 6px; vertical-align: -2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; }
+    th, td { border-bottom: 1px solid #e7e5e4; padding: 8px 6px; text-align: left; }
+    th { color: var(--muted); font-weight: 500; }
+    .ok { color: #3f6212; }
+    .note { font-size: 13px; color: var(--muted); line-height: 1.55; margin-top: 12px; }
+    svg { width: 100%; height: auto; display: block; background: #fff; border: 1px solid #e7e5e4; }
+  </style>
+</head>
+<body>
+  <!--
+    scale=36, pad=40, y南→北
+    X=40+x*36 | Y=40+(11.2-y)*36
+    建築面積 62.9㎡ = 西翼4.2×10.8 + 北翼9.2×3.5 − 重疊4.2×3.5
+  -->
+  <h1>L 型平面｜建蔽用滿約 19.2 坪</h1>
+  <p class="lead">
+    基地約 105.5㎡ × 建蔽率 60% → 建築面積上限 <strong>63.3㎡（約 19.2 坪）</strong>。
+    先前方案只做到約 12 坪，確實沒有用滿。本版建築面積 <strong>62.9㎡（19.0 坪，建蔽約 59.6%）</strong>。
+    為在保留約 3×3m 露天中庭與臨路雙車位深度的前提下用滿建蔽，採<strong>西翼貫穿＋北翼</strong>的 L 型；中庭在 L 彎內，固定車位與靈活空間在中庭南側<strong>橫向並排</strong>。
+  </p>
+
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--build)"></i>計入建築面積（62.9㎡）</span>
+    <span><i class="swatch" style="background:var(--court)"></i>露天中庭（不計）</span>
+    <span><i class="swatch" style="background:var(--eave)"></i>屋簷外廊 1.5m（原則不計）</span>
+    <span><i class="swatch" style="background:var(--park)"></i>固定車位</span>
+    <span><i class="swatch" style="background:var(--flex)"></i>靈活空間</span>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>① 建築面積配置（用滿建蔽）</h2>
+      <svg viewBox="0 0 420 480" role="img" aria-label="建蔽用滿之基地配置">
+        <rect width="420" height="480" fill="#fff"/>
+        <g font-family="Noto Sans TC, sans-serif">
+          <polygon points="40,443.2 400,443.2 382,40 58,36.4" fill="#f3efe6" stroke="#1c1917" stroke-width="2"/>
+
+          <!-- 北翼 x0.4~9.6 y7.6~11.1 -->
+          <rect x="54.4" y="43.6" width="331.2" height="126" fill="#d6b98c" stroke="#5c4a1f" stroke-width="2"/>
+          <!-- 西翼 x0.4~4.6 y0.3~11.1 -->
+          <rect x="54.4" y="43.6" width="151.2" height="388.8" fill="#d6b98c" stroke="#5c4a1f" stroke-width="2"/>
+
+          <!-- 中庭 x4.6~8.0 y4.6~7.6 -->
+          <rect x="205.6" y="169.6" width="122.4" height="108" fill="#9caf88" stroke="#3f4d32" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <!-- 屋簷 1.5m -->
+          <rect x="205.6" y="169.6" width="54" height="108" fill="#e8d9b8" stroke="#8b6914" stroke-width="1"/>
+          <rect x="205.6" y="169.6" width="122.4" height="54" fill="#e8d9b8" stroke="#8b6914" stroke-width="1" opacity="0.9"/>
+
+          <!-- 車位橫排 y0.2~4.5 -->
+          <rect x="205.6" y="281.2" width="97.2" height="154.8" fill="#c5ccd1" stroke="#44403c" stroke-width="1.5" stroke-dasharray="5 3"/>
+          <rect x="302.8" y="281.2" width="90" height="154.8" fill="#ddd6c8" stroke="#6b7f56" stroke-width="1.5"/>
+
+          <text x="130" y="220" text-anchor="middle" font-size="14" font-weight="600" fill="#3d3218">西翼（計入）</text>
+          <text x="130" y="240" text-anchor="middle" font-size="11" fill="#5c4a1f">4.2×10.8＝45.4㎡</text>
+          <text x="260" y="100" text-anchor="middle" font-size="14" font-weight="600" fill="#3d3218">北翼（計入）</text>
+          <text x="260" y="118" text-anchor="middle" font-size="11" fill="#5c4a1f">9.2×3.5＝32.2㎡</text>
+          <text x="290" y="220" text-anchor="middle" font-size="13" font-weight="600" fill="#3f4d32">露天中庭</text>
+          <text x="290" y="238" text-anchor="middle" font-size="11" fill="#3f4d32">3.4×3.0＝10.2㎡・不計</text>
+          <text x="232" y="255" text-anchor="middle" font-size="10" fill="#8b6914">屋簷1.5m</text>
+          <text x="254" y="350" text-anchor="middle" font-size="12">固定車位</text>
+          <text x="254" y="368" text-anchor="middle" font-size="10" fill="#57534e">2.7×4.3m</text>
+          <text x="348" y="350" text-anchor="middle" font-size="12">靈活空間</text>
+          <text x="348" y="368" text-anchor="middle" font-size="10" fill="#57534e">2.5×4.3m・橫排</text>
+
+          <text x="220" y="470" text-anchor="middle" font-size="12" fill="#44403c">南 10m（臨路）</text>
+          <text x="28" y="240" text-anchor="middle" font-size="11" fill="#44403c" transform="rotate(-90 28 240)">西 11.2m</text>
+          <g transform="translate(385,70)">
+            <circle r="16" fill="#fff" stroke="#1c1917"/>
+            <polygon points="0,-9 4,5 -4,5" fill="#1c1917"/>
+            <text y="28" text-anchor="middle" font-size="10">N</text>
+          </g>
+        </g>
+      </svg>
+      <table>
+        <tr><th>項目</th><th>計算</th><th>結果</th></tr>
+        <tr><td>法定建蔽上限</td><td>105.5 × 60%</td><td><strong>63.3㎡ ≈ 19.2 坪</strong></td></tr>
+        <tr><td>西翼</td><td>4.2 × 10.8</td><td>45.4㎡</td></tr>
+        <tr><td>北翼</td><td>9.2 × 3.5</td><td>32.2㎡</td></tr>
+        <tr><td>重疊扣除</td><td>4.2 × 3.5</td><td>−14.7㎡</td></tr>
+        <tr><td>本案建築面積</td><td></td><td class="ok"><strong>62.9㎡ ≈ 19.0 坪（59.6%）</strong></td></tr>
+        <tr><td>露天中庭</td><td>3.4 × 3.0</td><td class="ok">10.2㎡・不計建蔽</td></tr>
+        <tr><td>屋簷外廊</td><td>深 1.5m ≤ 2m</td><td class="ok">原則不計</td></tr>
+      </table>
+      <p class="note">
+        若堅持「東翼＋中庭在西、車位又在東側臨路」，中庭深度與車位深度會互搶進深，單層建蔽大約只能到約 54㎡（16 坪多）。
+        要用滿 19.2 坪，西翼拉滿進深是較合理的 L 畫法。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>② 一樓平面（面積＝寬×深）</h2>
+      <svg viewBox="0 0 420 480" role="img" aria-label="一樓平面圖">
+        <rect width="420" height="480" fill="#fff"/>
+        <g font-family="Noto Sans TC, sans-serif">
+          <polygon points="40,443.2 400,443.2 382,40 58,36.4" fill="#faf8f4" stroke="#1c1917" stroke-width="2"/>
+          <rect x="54.4" y="43.6" width="331.2" height="126" fill="#f0e6d4" stroke="#5c4a1f" stroke-width="2.5"/>
+          <rect x="54.4" y="43.6" width="151.2" height="388.8" fill="#f0e6d4" stroke="#5c4a1f" stroke-width="2.5"/>
+
+          <rect x="205.6" y="169.6" width="122.4" height="108" fill="#c5d6b8" stroke="#3f4d32" stroke-width="1.5" stroke-dasharray="5 3"/>
+          <rect x="205.6" y="169.6" width="54" height="108" fill="none" stroke="#8b6914" stroke-width="1.2"/>
+          <rect x="205.6" y="169.6" width="122.4" height="54" fill="none" stroke="#8b6914" stroke-width="1.2"/>
+
+          <!-- 玄關 2.0×2.1：x0.4~2.4 y0.3~2.4 → X54.4~126.4 W72; Y=40+(11.2-2.4)*36=356.8, H=75.6 -->
+          <rect x="54.4" y="356.8" width="72" height="75.6" fill="#e8dfd0" stroke="#5c5346" stroke-width="1"/>
+          <text x="90" y="390" text-anchor="middle" font-size="12" font-weight="600">玄關</text>
+          <text x="90" y="408" text-anchor="middle" font-size="10" fill="#6b6254">2.0×2.1＝4.2㎡</text>
+
+          <!-- 儲藏 2.2×2.1：x2.4~4.6 -->
+          <rect x="126.4" y="356.8" width="79.2" height="75.6" fill="#e4d9c8" stroke="#5c5346" stroke-width="1"/>
+          <text x="166" y="390" text-anchor="middle" font-size="12" font-weight="600">儲藏</text>
+          <text x="166" y="408" text-anchor="middle" font-size="10" fill="#6b6254">2.2×2.1＝4.6㎡</text>
+
+          <!-- LDK 4.2×5.2：y2.4~7.6 → Y=169.6, H=187.2 -->
+          <rect x="54.4" y="169.6" width="151.2" height="187.2" fill="#f5ecdc" stroke="#5c5346" stroke-width="1"/>
+          <text x="130" y="250" text-anchor="middle" font-size="14" font-weight="600">客廳・餐廳・廚房</text>
+          <text x="130" y="272" text-anchor="middle" font-size="12" fill="#6b6254">4.2×5.2＝21.8㎡（最大）</text>
+
+          <!-- 衛浴 1.8×3.5：x0.4~2.2 y7.6~11.1 → W64.8 H126 -->
+          <rect x="54.4" y="43.6" width="64.8" height="126" fill="#d5dde3" stroke="#5c5346" stroke-width="1"/>
+          <text x="87" y="100" text-anchor="middle" font-size="12" font-weight="600">衛浴</text>
+          <text x="87" y="118" text-anchor="middle" font-size="10" fill="#6b6254">1.8×3.5＝6.3㎡</text>
+
+          <!-- 樓梯 2.2×3.5：x2.4~4.6 y7.6~11.1 → X126.4~205.6 W79.2; Y43.6 H126 -->
+          <rect x="126.4" y="43.6" width="79.2" height="126" fill="#ddd2c0" stroke="#5c5346" stroke-width="1"/>
+          <text x="166" y="100" text-anchor="middle" font-size="12" font-weight="600">樓梯</text>
+          <text x="166" y="118" text-anchor="middle" font-size="10" fill="#6b6254">2.2×3.5＝7.7㎡</text>
+
+          <!-- 和室 3.2×3.5：x4.6~7.8 y7.6~11.1 → X205.6~320.8 W115.2 -->
+          <rect x="205.6" y="43.6" width="115.2" height="126" fill="#dfe6d0" stroke="#5c5346" stroke-width="1"/>
+          <text x="263" y="95" text-anchor="middle" font-size="13" font-weight="600">和室／書房</text>
+          <text x="263" y="114" text-anchor="middle" font-size="11" fill="#6b6254">3.2×3.5＝11.2㎡</text>
+          <text x="263" y="132" text-anchor="middle" font-size="10" fill="#6b6254">面中庭</text>
+
+          <!-- 北翼東端多功能／臥預留 1.8×3.5：x7.8~9.6 -->
+          <rect x="320.8" y="43.6" width="64.8" height="126" fill="#ebe2d2" stroke="#5c5346" stroke-width="1"/>
+          <text x="353" y="100" text-anchor="middle" font-size="11" font-weight="600">工作</text>
+          <text x="353" y="118" text-anchor="middle" font-size="10" fill="#6b6254">1.8×3.5＝6.3㎡</text>
+
+          <text x="290" y="215" text-anchor="middle" font-size="13" font-weight="600" fill="#3f4d32">露天中庭</text>
+          <text x="290" y="233" text-anchor="middle" font-size="11" fill="#3f4d32">植栽・透光</text>
+
+          <rect x="205.6" y="281.2" width="97.2" height="154.8" fill="#dbe0e4" stroke="#44403c" stroke-width="1.5" stroke-dasharray="5 3"/>
+          <text x="254" y="355" text-anchor="middle" font-size="12">固定車位</text>
+          <rect x="302.8" y="281.2" width="90" height="154.8" fill="#e8e2d6" stroke="#6b7f56" stroke-width="1.5"/>
+          <text x="348" y="355" text-anchor="middle" font-size="12">靈活空間</text>
+
+          <text x="220" y="470" text-anchor="middle" font-size="12" fill="#44403c">南臨路</text>
+        </g>
+      </svg>
+      <table>
+        <tr><th>空間</th><th>尺寸</th><th>面積</th></tr>
+        <tr><td>客廳・餐廳・廚房</td><td>4.2 × 5.2</td><td><strong>21.8㎡</strong></td></tr>
+        <tr><td>和室／書房</td><td>3.2 × 3.5</td><td>11.2㎡</td></tr>
+        <tr><td>工作間（北翼東）</td><td>1.8 × 3.5</td><td>6.3㎡</td></tr>
+        <tr><td>玄關</td><td>2.0 × 2.1</td><td>4.2㎡</td></tr>
+        <tr><td>儲藏</td><td>2.2 × 2.1</td><td>4.6㎡</td></tr>
+        <tr><td>衛浴</td><td>1.8 × 3.5</td><td>6.3㎡</td></tr>
+        <tr><td>樓梯間</td><td>2.2 × 3.5</td><td>7.7㎡</td></tr>
+      </table>
+      <p class="note">所有面積均由圖面寬×深計算；客餐廚 21.8㎡ 明顯大於和室 11.2㎡。</p>
+    </section>
+  </div>
+</body>
+</html>
