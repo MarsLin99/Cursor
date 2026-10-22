@@ -1,0 +1,332 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		8D692C2167FE4E75BE4C3E57 /* JingqiGuanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3801EC85CD5143E893C476A7 /* JingqiGuanceApp.swift */; };
+		BBB591EB27AA48F29FF905D9 /* Models/Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6E4BB001ED04C3BAE1DC6E1 /* Models/Models.swift */; };
+		337C97E342E042BA84BAEC57 /* Services/CSV.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B18D5BA6744FEB97A20BE8 /* Services/CSV.swift */; };
+		453E0CF58C764855AE19EBA3 /* Services/DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE9F959089442C68736D38B /* Services/DashboardViewModel.swift */; };
+		D45EFBDF2B8045CCBDBA8E12 /* Services/HTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F112C614104A45369E222B44 /* Services/HTTPClient.swift */; };
+		FAEC88DD766540E29633E5FF /* Services/IndicatorServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CA2A522C464A5AA4ED0EF4 /* Services/IndicatorServices.swift */; };
+		4411357EAAE342CB9E1F2513 /* Services/ZipReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CCA81E5BD314AC9A517EF94 /* Services/ZipReader.swift */; };
+		320FD4DC327D4F0CB2D7A4F2 /* Views/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4008F7A3DDA3451E8B72B4D5 /* Views/ContentView.swift */; };
+		D3A3D9AF88264468AC0EB103 /* Views/IndicatorCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABEE708D6FE45E9AC2F0FE7 /* Views/IndicatorCard.swift */; };
+		32675B0110C444A0A4C4A729 /* Views/StockCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CD78BB49D3242DF8ABB4CFF /* Views/StockCard.swift */; };
+		D6C56EDCC12349A6B48E0373 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 54641D6CED654F44BAB26D6A /* Assets.xcassets */; };
+		B35D61AF00004626966F1A49 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 91191627CF4642998559791B /* ZIPFoundation */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0BAA66DC37DE4EAEBC83C002 /* 景氣觀測.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "景氣觀測.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		3801EC85CD5143E893C476A7 /* JingqiGuanceApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "JingqiGuanceApp.swift"; sourceTree = "<group>"; };
+		F6E4BB001ED04C3BAE1DC6E1 /* Models/Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Models.swift"; sourceTree = "<group>"; };
+		A9B18D5BA6744FEB97A20BE8 /* Services/CSV.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CSV.swift"; sourceTree = "<group>"; };
+		7CE9F959089442C68736D38B /* Services/DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardViewModel.swift"; sourceTree = "<group>"; };
+		F112C614104A45369E222B44 /* Services/HTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HTTPClient.swift"; sourceTree = "<group>"; };
+		54CA2A522C464A5AA4ED0EF4 /* Services/IndicatorServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "IndicatorServices.swift"; sourceTree = "<group>"; };
+		5CCA81E5BD314AC9A517EF94 /* Services/ZipReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ZipReader.swift"; sourceTree = "<group>"; };
+		4008F7A3DDA3451E8B72B4D5 /* Views/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
+		AABEE708D6FE45E9AC2F0FE7 /* Views/IndicatorCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "IndicatorCard.swift"; sourceTree = "<group>"; };
+		8CD78BB49D3242DF8ABB4CFF /* Views/StockCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StockCard.swift"; sourceTree = "<group>"; };
+		54641D6CED654F44BAB26D6A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		87F16B3005FB47B2895DAB67 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		9C38B0FE08904BAB9C9499EB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B35D61AF00004626966F1A49 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		404D61603D95410C87384AAB = {
+			isa = PBXGroup;
+			children = (
+				AA50777F487548EBADDFECF7 /* JingqiGuance */,
+				986A4A62D3FF454B8CAE93BD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		986A4A62D3FF454B8CAE93BD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				0BAA66DC37DE4EAEBC83C002 /* 景氣觀測.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA50777F487548EBADDFECF7 /* JingqiGuance */ = {
+			isa = PBXGroup;
+			children = (
+				3801EC85CD5143E893C476A7 /* JingqiGuanceApp.swift */,
+				4FBF1014E122423BB878471C /* Models */,
+				F27FB9B57DDE4A18909B9C18 /* Services */,
+				5130A8402D9A4675824C4598 /* Views */,
+				54641D6CED654F44BAB26D6A /* Assets.xcassets */,
+				87F16B3005FB47B2895DAB67 /* Info.plist */,
+			);
+			path = JingqiGuance;
+			sourceTree = "<group>";
+		};
+		4FBF1014E122423BB878471C /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F6E4BB001ED04C3BAE1DC6E1 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		F27FB9B57DDE4A18909B9C18 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A9B18D5BA6744FEB97A20BE8 /* CSV.swift */,
+				7CE9F959089442C68736D38B /* DashboardViewModel.swift */,
+				F112C614104A45369E222B44 /* HTTPClient.swift */,
+				54CA2A522C464A5AA4ED0EF4 /* IndicatorServices.swift */,
+				5CCA81E5BD314AC9A517EF94 /* ZipReader.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		5130A8402D9A4675824C4598 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				4008F7A3DDA3451E8B72B4D5 /* ContentView.swift */,
+				AABEE708D6FE45E9AC2F0FE7 /* IndicatorCard.swift */,
+				8CD78BB49D3242DF8ABB4CFF /* StockCard.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		884A9853708A4F4999CB4ECE /* 景氣觀測 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 36064651B9D34E18A20D5B57 /* Build configuration list for PBXNativeTarget "景氣觀測" */;
+			buildPhases = (
+				D598263C0B2B459FB0834138 /* Sources */,
+				9C38B0FE08904BAB9C9499EB /* Frameworks */,
+				6865DD9AABC6433B9D154A4F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "景氣觀測";
+			packageProductDependencies = (
+				91191627CF4642998559791B /* ZIPFoundation */,
+			);
+			productName = "景氣觀測";
+			productReference = 0BAA66DC37DE4EAEBC83C002 /* 景氣觀測.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7A4241EAAA094C25AD919A77 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = A83C9B8F55994EBDA527020A /* Build configuration list for PBXProject "JingqiGuance" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hant";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hant",
+			);
+			mainGroup = 404D61603D95410C87384AAB;
+			packageReferences = (
+				060E006CDF674472908B7B37 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			productRefGroup = 986A4A62D3FF454B8CAE93BD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				884A9853708A4F4999CB4ECE /* 景氣觀測 */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6865DD9AABC6433B9D154A4F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D6C56EDCC12349A6B48E0373 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D598263C0B2B459FB0834138 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8D692C2167FE4E75BE4C3E57 /* JingqiGuanceApp.swift in Sources */,
+				BBB591EB27AA48F29FF905D9 /* Models/Models.swift in Sources */,
+				337C97E342E042BA84BAEC57 /* Services/CSV.swift in Sources */,
+				453E0CF58C764855AE19EBA3 /* Services/DashboardViewModel.swift in Sources */,
+				D45EFBDF2B8045CCBDBA8E12 /* Services/HTTPClient.swift in Sources */,
+				FAEC88DD766540E29633E5FF /* Services/IndicatorServices.swift in Sources */,
+				4411357EAAE342CB9E1F2513 /* Services/ZipReader.swift in Sources */,
+				320FD4DC327D4F0CB2D7A4F2 /* Views/ContentView.swift in Sources */,
+				D3A3D9AF88264468AC0EB103 /* Views/IndicatorCard.swift in Sources */,
+				32675B0110C444A0A4C4A729 /* Views/StockCard.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		DE15FA3ED2D943308D6FE55C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		9AFF3A228CA2457AA2367603 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_DYNAMIC_NO_PIC = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = NO;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		DD61DA12DBA54345A4E4D800 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JingqiGuance/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "景氣觀測";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.personal.jingqiguance;
+				PRODUCT_NAME = "景氣觀測";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		816FF299890F4586AD526D19 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JingqiGuance/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "景氣觀測";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.personal.jingqiguance;
+				PRODUCT_NAME = "景氣觀測";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A83C9B8F55994EBDA527020A /* Build configuration list for PBXProject "JingqiGuance" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DE15FA3ED2D943308D6FE55C /* Debug */,
+				9AFF3A228CA2457AA2367603 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		36064651B9D34E18A20D5B57 /* Build configuration list for PBXNativeTarget "景氣觀測" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD61DA12DBA54345A4E4D800 /* Debug */,
+				816FF299890F4586AD526D19 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		060E006CDF674472908B7B37 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.19;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		91191627CF4642998559791B /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 060E006CDF674472908B7B37 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 7A4241EAAA094C25AD919A77 /* Project object */;
+}
