@@ -1,0 +1,46 @@
+:root {
+  --brand: #0f3d3e;
+  --ink: #1c2b2b;
+  --muted: #5d6f6f;
+  --accent: #b8893d;
+  --accent-deep: #8f6424;
+  --up: #c45c4a;
+  --down: #1f7a6c;
+  color-scheme: light;
+  font-family: 'Instrument Sans', 'Noto Sans TC', sans-serif;
+  line-height: 1.45;
+  font-weight: 450;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-width: 320px;
+  background: #e7f0ec;
+  color: var(--ink);
+}
+
+button,
+input,
+select {
+  color: inherit;
+}
+
+a {
+  color: inherit;
+}
