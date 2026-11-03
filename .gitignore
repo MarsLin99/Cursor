@@ -28,3 +28,4 @@ quote_bridge/.env
 quote_bridge/Configs/
 quote_bridge/vendor/
 quote_bridge/*.whl
+quote_bridge/__pycache__/
