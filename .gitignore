@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 台新行情元件、連線設定與帳號密碼只留在本機
+quote_bridge/.env
+quote_bridge/Configs/
+quote_bridge/vendor/
+quote_bridge/*.whl

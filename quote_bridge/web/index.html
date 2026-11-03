@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>即時報價</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #10140f;
+      --panel: #1a2118;
+      --line: #2c3828;
+      --text: #f3f6ef;
+      --muted: #9aa892;
+      --up: #ff5a6a;
+      --down: #3dcc7a;
+      --flat: #d7dece;
+      --bid: #ff8b96;
+      --ask: #7dE7a8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif;
+      background:
+        radial-gradient(1000px 400px at 10% -10%, #243222 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      padding: 28px 32px 8px;
+    }
+    h1 { margin: 0; font-size: 28px; letter-spacing: 0.04em; }
+    p { margin: 6px 0 0; color: var(--muted); }
+    .status {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 8px 14px;
+      color: var(--muted);
+    }
+    .status.ok { color: var(--down); }
+    .status.bad { color: var(--up); }
+    main {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      padding: 20px 32px 40px;
+    }
+    article {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px 18px 14px;
+    }
+    .top { display: flex; justify-content: space-between; align-items: baseline; }
+    .symbol { font-size: 20px; font-weight: 700; }
+    .name { color: var(--muted); margin-left: 8px; }
+    .price { font-size: 42px; font-variant-numeric: tabular-nums; margin: 8px 0 0; }
+    .meta { color: var(--muted); min-height: 1.4em; }
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    .flat { color: var(--flat); }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
+    th, td { padding: 4px 0; text-align: right; }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    td.bid { color: var(--bid); }
+    td.ask { color: var(--ask); }
+    .empty { color: var(--muted); padding: 24px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>即時報價</h1>
+      <p>台新證券行情。這頁只在執行程式的這台電腦上開。</p>
+    </div>
+    <div id="status" class="status">連線中</div>
+  </header>
+  <main id="board"><div class="empty">等待報價…</div></main>
+  <script>
+    const board = document.getElementById("board")
+    const statusEl = document.getElementById("status")
+    const quotes = new Map()
+
+    function money(value) {
+      const n = Number(String(value).replace(/,/g, ""))
+      if (!Number.isFinite(n)) return "—"
+      const text = n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")
+      return text || "0"
+    }
+
+    function qty(value) {
+      const n = Number(String(value).replace(/,/g, ""))
+      if (!Number.isFinite(n)) return "—"
+      return Math.round(n).toLocaleString("zh-Hant")
+    }
+
+    function direction(quote) {
+      const match = Number(quote.matchPrice)
+      const ref = Number(quote.refPrice)
+      if (!Number.isFinite(match) || !Number.isFinite(ref) || ref === 0) return "flat"
+      if (match > ref) return "up"
+      if (match < ref) return "down"
+      return "flat"
+    }
+
+    function changeText(quote) {
+      const match = Number(quote.matchPrice)
+      const ref = Number(quote.refPrice)
+      if (!Number.isFinite(match) || !Number.isFinite(ref) || ref === 0) return "—"
+      const diff = match - ref
+      const pct = (diff / ref) * 100
+      const sign = diff > 0 ? "+" : ""
+      return `${sign}${money(diff)}（${sign}${pct.toFixed(2)}%）`
+    }
+
+    function levels(quote) {
+      const buyP = quote.buyPrice || []
+      const buyQ = quote.buyQty || []
+      const sellP = quote.sellPrice || []
+      const sellQ = quote.sellQty || []
+      let rows = ""
+      for (let i = 0; i < 5; i += 1) {
+        rows += `<tr>
+          <td class="bid">${money(buyP[i])}</td>
+          <td class="bid">${qty(buyQ[i])}</td>
+          <td class="ask">${money(sellP[i])}</td>
+          <td class="ask">${qty(sellQ[i])}</td>
+        </tr>`
+      }
+      return rows
+    }
+
+    function render() {
+      const items = [...quotes.values()]
+      if (!items.length) {
+        board.innerHTML = '<div class="empty">等待報價…</div>'
+        return
+      }
+      board.innerHTML = items.map((quote) => {
+        const side = direction(quote)
+        return `<article>
+          <div class="top">
+            <div><span class="symbol">${quote.symbol}</span><span class="name">${quote.name || ""}</span></div>
+            <div class="meta">${quote.matchTime || quote.orderBookTime || ""}</div>
+          </div>
+          <div class="price ${side}">${money(quote.matchPrice)}</div>
+          <div class="meta ${side}">${changeText(quote)}　總量 ${qty(quote.totalMatchQty)}</div>
+          <table>
+            <thead><tr><th>買價</th><th>買量</th><th>賣價</th><th>賣量</th></tr></thead>
+            <tbody>${levels(quote)}</tbody>
+          </table>
+        </article>`
+      }).join("")
+    }
+
+    function apply(payload) {
+      if (payload.status) {
+        statusEl.textContent = payload.status
+        statusEl.className = "status " + (payload.ok ? "ok" : payload.bad ? "bad" : "")
+      }
+      for (const quote of payload.quotes || []) {
+        if (!quote.symbol) continue
+        quotes.set(quote.symbol, { ...quotes.get(quote.symbol), ...quote })
+      }
+      render()
+    }
+
+    function connect() {
+      const source = new EventSource("/api/stream")
+      source.onmessage = (event) => {
+        apply(JSON.parse(event.data))
+      }
+      source.onerror = () => {
+        statusEl.textContent = "連線中斷，重新接上中"
+        statusEl.className = "status bad"
+        source.close()
+        setTimeout(connect, 1500)
+      }
+    }
+
+    fetch("/api/quotes").then((res) => res.json()).then(apply).catch(() => {})
+    connect()
+  </script>
+</body>
+</html>
