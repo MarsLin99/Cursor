@@ -1331,7 +1331,7 @@ function buildSpark(
 
   // 買賣力＝當天開盤到這一分鐘的累積（外盤−內盤）張數，跟台新證券 App 的「內外盤差」同一個數。
   // 1) 台新逐筆（成交價≧委賣算外盤、≦委買算內盤）是主來源：有每分鐘外內盤就用那一分鐘的差，
-  //    沒有就用累積序列 bias 在該分鐘末的變化。13:25～13:29 收盤試撮不算；13:30 收盤那一筆的差不能超過那根量。
+  //    沒有就用累積序列 bias 在該分鐘末的變化。13:25 以後（收盤試撮與 13:30 收盤撮合）都不算，13:30 那條沿用 13:24 的累積（同台新 App）。
   // 2) 台新開始收到這檔之前的分鐘（晚訂閱）：先用 Yahoo 累積外內盤（有記錄的話，直接對齊它的累積），
   //    再沒有就用即時抽樣（量在 0.5～1.5 倍內）或依收盤位置拆（split_by_close）估；之後接台新的變化量。
   // 3) 完全沒有台新：Yahoo → 抽樣 → split_by_close。
@@ -1342,7 +1342,7 @@ function buildSpark(
   let yahooMinutes = 0
   let estMinutes = 0
   const hm = (m: number) => hms(m).slice(0, 5)
-  const inTrial = (m: number) => m >= CLOSE_AUCTION && m < SPARK_CLOSE
+  const inTrial = (m: number) => m >= CLOSE_AUCTION
   const sampled = flowSamples(symbol, sessionDate)
   const livePrice = sampledPrice(symbol, sessionDate)
   const barAt = new Map<number, MinuteBar>()
@@ -1376,13 +1376,8 @@ function buildSpark(
     let prevD = 0
     for (const m of keys) {
       const pair = bucketAt.get(m)
-      let net = pair ? pair[0] - pair[1] : endOf.has(m) ? endOf.get(m)! - prevD : 0
+      const net = pair ? pair[0] - pair[1] : endOf.has(m) ? endOf.get(m)! - prevD : 0
       prevD = endOf.has(m) ? endOf.get(m)! : prevD + net
-      if (m >= SPARK_CLOSE) {
-        // 收盤撮合只有一筆：差值超過那根量就是試撮累積量混進來，不算
-        const cap = barAt.get(m)?.v ?? 0
-        if (Math.abs(net) > cap + 0.5) net = 0
-      }
       tsNet.set(m, { net, out: pair ? pair[0] : null, inn: pair ? pair[1] : null })
     }
   }
@@ -1433,6 +1428,15 @@ function buildSpark(
     flow.push({ t: hms(m), out, inn, net: Math.round(net * 10) / 10, cum: Math.round(cum), src })
     force.push({ t: hms(m), d: Math.round(cum) })
   }
+  // 13:30 收盤撮合不算內外盤：有收盤那一分鐘就畫一條沿用 13:24 的累積
+  if (flow.length && (barAt.has(SPARK_CLOSE) || points.some((point) => stampMinute(point.t) === SPARK_CLOSE))) {
+    flow.push({ t: hms(SPARK_CLOSE), out: 0, inn: 0, net: 0, cum: Math.round(cum), src: flow.at(-1)!.src })
+    force.push({ t: hms(SPARK_CLOSE), d: Math.round(cum) })
+  }
+  const altRows = useLive && live ? Object.entries((live as { altMinutes?: Record<string, Record<string, number>> }).altMinutes ?? {})
+    .filter(([key]) => inSparkSession(stampMinute(key)) && stampMinute(key) < CLOSE_AUCTION)
+    .sort((x, y) => (x[0] < y[0] ? -1 : 1)) : []
+  const alt = altRows.length ? { at: altRows.at(-1)![0], ...altRows.at(-1)![1] } : null
   const yLast = yRows.length ? yRows.reduce((x, y) => (y[0] > x[0] ? y : x)) : null
 
   const q = ext?.quote ?? null
@@ -1472,6 +1476,7 @@ function buildSpark(
       estMinutes,
       yahooNet: yLast ? yLast[1][0] - yLast[1][1] : null,
       yahooAt: yLast ? hms(yLast[0]) : null,
+      alt,
       cnyesBars: ext?.cnyes ?? 0,
       yahooBars: ext?.yahoo ?? 0,
     },

@@ -146,6 +146,8 @@ export type SparkBook = {
     /** Yahoo 最新累積（外盤−內盤）與其時間，供對照 */
     yahooNet?: number | null
     yahooAt?: string | null
+    /** 台新逐筆幾種內外盤判法的最新累積（對照用） */
+    alt?: Record<string, number | string> | null
     cnyesBars: number
     yahooBars: number
   }
