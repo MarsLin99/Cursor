@@ -93,7 +93,16 @@ function Spark({
   const force = book?.force ?? []
   const extreme = Math.max(...force.map((point) => Math.abs(point.d)), 1)
   const yForce = (value: number) => forceTop + ((extreme - value) / (extreme * 2)) * forceH
-  const forceLine = force.map((point) => `${xOf(point.t)},${yForce(point.d)}`).join(' ')
+  // 每分鐘取最後一筆累積內外盤張數差，畫成以 0 為基準的條狀圖
+  const forceBars = [
+    ...force
+      .reduce((byMinute, point) => {
+        byMinute.set(Math.min(SESSION_END, Math.max(SESSION_START, minuteOf(point.t))), point)
+        return byMinute
+      }, new Map<number, (typeof force)[number]>())
+      .values(),
+  ]
+  const barW = Math.max(0.6, ((width - plotLeft) / (SESSION_END - SESSION_START)) * 0.8)
   const bias = book?.bias ?? force.at(-1)?.d ?? 0
   const digits = price != null && price >= 1000 ? 0 : 2
   return (
@@ -142,9 +151,20 @@ function Spark({
           買賣力道 {signed(bias, 0)}
         </text>
         <line x1={plotLeft} x2={width} y1={yForce(0)} y2={yForce(0)} className="zero" />
-        {force.length > 1 ? (
-          <polyline points={forceLine} className={bias >= 0 ? 'force up' : 'force down'} />
-        ) : null}
+        {forceBars.map((point) => {
+          const y0 = yForce(0)
+          const y = yForce(point.d)
+          return (
+            <rect
+              key={point.t}
+              x={xOf(point.t) - barW / 2}
+              y={Math.min(y, y0)}
+              width={barW}
+              height={Math.max(0.5, Math.abs(y - y0))}
+              className={point.d >= 0 ? 'force-bar up' : 'force-bar down'}
+            />
+          )
+        })}
       </svg>
       <footer style={{ paddingLeft: `${(plotLeft / width) * 100}%` }}>
         <span>09:00</span>

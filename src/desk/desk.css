@@ -784,3 +784,11 @@
     grid-template-columns: 1fr;
   }
 }
+
+.spark-card .force-bar.up {
+  fill: var(--up);
+}
+
+.spark-card .force-bar.down {
+  fill: var(--down);
+}
