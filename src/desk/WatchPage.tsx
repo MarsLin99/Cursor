@@ -105,7 +105,8 @@ function flowRows(book?: SparkBook): FlowRow[] {
 }
 
 /** 超過 2 分鐘沒有成交就斷線，不用斜線硬接 */
-function segmentsOf(points: SparkPoint[], maxGapSec = 120) {
+// 後端已把沒成交的分鐘補成上一筆價，只有真的斷訊超過 5 分鐘才斷線
+function segmentsOf(points: SparkPoint[], maxGapSec = 300) {
   const out: SparkPoint[][] = []
   let current: SparkPoint[] = []
   let lastSec = -Infinity
