@@ -15,7 +15,7 @@ import type {
 } from '../src/desk/types.ts'
 import { getInsightBundle, makeInsightReport, readInsightReport } from './insight.ts'
 import { startTaishinFeed, taishinConnectedNow } from './taishin.ts'
-import { flowSamples, noteFlowSymbols, sampledPrice, startFlowSampler } from './flowSampler.ts'
+import { flowSamples, noteFlowSymbols, sampledPrice, startFlowSampler, yahooFlow } from './flowSampler.ts'
 
 const dataDir = path.join(process.cwd(), 'data')
 const macroFile = path.join(dataDir, 'macro-cache.json')
@@ -1329,52 +1329,111 @@ function buildSpark(
     points.push(point)
   }
 
-  // 買賣力（同參考程式 apply_flow）：每根一分K（鉅亨優先、Yahoo 補），該分鐘有即時抽樣（鉅亨成交＋MIS 委買賣判內外盤）
-  // 且抽樣總量在這根量的 0.5～1.5 倍之間就用抽樣，否則依收盤落在高低區間的位置拆（split_by_close），逐分累積。
-  // 台新逐筆的內外盤判定跟參考程式出入很大，13:25 後還會把收盤試撮量算進來，所以只在完全抓不到一分K時才退回台新。
+  // 買賣力＝當天開盤到這一分鐘的累積（外盤−內盤）張數，跟台新證券 App 的「內外盤差」同一個數。
+  // 1) 台新逐筆（成交價≧委賣算外盤、≦委買算內盤）是主來源：有每分鐘外內盤就用那一分鐘的差，
+  //    沒有就用累積序列 bias 在該分鐘末的變化。13:25～13:29 收盤試撮不算；13:30 收盤那一筆的差不能超過那根量。
+  // 2) 台新開始收到這檔之前的分鐘（晚訂閱）：先用 Yahoo 累積外內盤（有記錄的話，直接對齊它的累積），
+  //    再沒有就用即時抽樣（量在 0.5～1.5 倍內）或依收盤位置拆（split_by_close）估；之後接台新的變化量。
+  // 3) 完全沒有台新：Yahoo → 抽樣 → split_by_close。
   const flow: SparkFlow[] = []
   const force: SparkForce[] = []
   let cum = 0
   let taishinMinutes = 0
+  let yahooMinutes = 0
   let estMinutes = 0
-  const pushFlow = (m: number, pair: [number, number], src: SparkFlow['src']) => {
-    cum += pair[0] - pair[1]
+  const hm = (m: number) => hms(m).slice(0, 5)
+  const inTrial = (m: number) => m >= CLOSE_AUCTION && m < SPARK_CLOSE
+  const sampled = flowSamples(symbol, sessionDate)
+  const livePrice = sampledPrice(symbol, sessionDate)
+  const barAt = new Map<number, MinuteBar>()
+  extBars.forEach((bar, index) => {
+    const last = index === extBars.length - 1 && livePrice != null
+    barAt.set(bar.m, last ? { ...bar, c: livePrice, h: Math.max(bar.h, livePrice), l: Math.min(bar.l, livePrice) } : bar)
+  })
+  const estimate = (m: number): { pair: [number, number]; src: SparkFlow['src'] } | null => {
+    const bar = barAt.get(m)
+    if (!bar) return null
+    const sample = sampled[hm(m)]
+    const total = sample ? sample[0] + sample[1] : 0
+    if (bar.v > 0 && sample && total >= 0.5 * bar.v && total <= 1.5 * bar.v) return { pair: [sample[0], sample[1]], src: 'mis' }
+    return { pair: splitByClose(bar), src: 'est' }
+  }
+  // 台新：每分鐘淨張數
+  const tsNet = new Map<number, { net: number; out: number | null; inn: number | null }>()
+  if (useLive && live) {
+    const buckets = live.minutes ?? {}
+    const endOf = new Map<number, number>()
+    for (const point of [...(live.force ?? [])].sort((x, y) => (x.t < y.t ? -1 : x.t > y.t ? 1 : 0))) {
+      const m = stampMinute(point.t)
+      if (inSparkSession(m) && !inTrial(m)) endOf.set(m, point.d)
+    }
+    const bucketAt = new Map<number, [number, number]>()
+    for (const [key, pair] of Object.entries(buckets)) {
+      const m = stampMinute(key)
+      if (inSparkSession(m) && !inTrial(m)) bucketAt.set(m, pair)
+    }
+    const keys = [...new Set([...endOf.keys(), ...bucketAt.keys()])].sort((x, y) => x - y)
+    let prevD = 0
+    for (const m of keys) {
+      const pair = bucketAt.get(m)
+      let net = pair ? pair[0] - pair[1] : endOf.has(m) ? endOf.get(m)! - prevD : 0
+      prevD = endOf.has(m) ? endOf.get(m)! : prevD + net
+      if (m >= SPARK_CLOSE) {
+        // 收盤撮合只有一筆：差值超過那根量就是試撮累積量混進來，不算
+        const cap = barAt.get(m)?.v ?? 0
+        if (Math.abs(net) > cap + 0.5) net = 0
+      }
+      tsNet.set(m, { net, out: pair ? pair[0] : null, inn: pair ? pair[1] : null })
+    }
+  }
+  const firstTs = tsNet.size ? Math.min(...tsNet.keys()) : null
+  // Yahoo：每分鐘末的累積外盤／內盤
+  const yRows = Object.entries(yahooFlow(symbol, sessionDate))
+    .map(([key, pair]) => [stampMinute(key), pair] as const)
+    .filter(([m]) => inSparkSession(m) && !inTrial(m))
+  const yahooAt = new Map<number, [number, number]>(yRows)
+  const rowMinutes = [...new Set([...barAt.keys(), ...tsNet.keys(), ...yahooAt.keys()])]
+    .filter((m) => inSparkSession(m) && !inTrial(m))
+    .sort((x, y) => x - y)
+  let yPrev: [number, number] | null = null
+  const split = (m: number, net: number): [number, number] => {
+    const v = barAt.get(m)?.v ?? Math.abs(net)
+    const total = Math.max(v, Math.abs(net))
+    return [(total + net) / 2, (total - net) / 2]
+  }
+  for (const m of rowMinutes) {
+    let pair: [number, number]
+    let net: number
+    let src: SparkFlow['src']
+    const y = yahooAt.get(m)
+    if (firstTs != null && m >= firstTs) {
+      const t = tsNet.get(m)
+      net = t?.net ?? 0
+      pair = t && t.out != null && t.inn != null ? [t.out, t.inn] : split(m, net)
+      src = 'taishin'
+      taishinMinutes++
+    } else if (y) {
+      // 直接對齊 Yahoo 的累積值（晚開始記錄時，前面估的分鐘差額併進這一分鐘）
+      net = y[0] - y[1] - cum
+      pair = yPrev ? [Math.max(0, y[0] - yPrev[0]), Math.max(0, y[1] - yPrev[1])] : split(m, net)
+      src = 'yahoo'
+      yahooMinutes++
+    } else {
+      const e = estimate(m)
+      if (!e) continue
+      pair = e.pair
+      net = pair[0] - pair[1]
+      src = e.src
+      estMinutes++
+    }
+    if (y) yPrev = y
+    cum += net
     const out = Math.round(pair[0] * 10) / 10
     const inn = Math.round(pair[1] * 10) / 10
-    flow.push({ t: hms(m), out, inn, net: Math.round((out - inn) * 10) / 10, src })
+    flow.push({ t: hms(m), out, inn, net: Math.round(net * 10) / 10, cum: Math.round(cum), src })
     force.push({ t: hms(m), d: Math.round(cum) })
   }
-  if (extBars.length) {
-    const sampled = flowSamples(symbol, sessionDate)
-    // 參考程式先把最後一根的收盤改成鉅亨即時價（高低跟著擴），再拆內外盤
-    const livePrice = sampledPrice(symbol, sessionDate)
-    const bars = extBars.map((bar, index) =>
-      index === extBars.length - 1 && livePrice != null
-        ? { ...bar, c: livePrice, h: Math.max(bar.h, livePrice), l: Math.min(bar.l, livePrice) }
-        : bar,
-    )
-    for (const bar of bars) {
-      if (!inSparkSession(bar.m)) continue
-      const sample = sampled[hms(bar.m).slice(0, 5)]
-      const total = sample ? sample[0] + sample[1] : 0
-      if (bar.v > 0 && sample && total >= 0.5 * bar.v && total <= 1.5 * bar.v) {
-        pushFlow(bar.m, [sample[0], sample[1]], 'mis')
-        taishinMinutes++
-      } else {
-        pushFlow(bar.m, splitByClose(bar), 'est')
-        estMinutes++
-      }
-    }
-  } else if (useLive) {
-    const rows = Object.entries(live?.minutes ?? {})
-      .map(([key, pair]) => [stampMinute(key), pair] as const)
-      .filter(([m]) => inSparkSession(m) && !(m >= CLOSE_AUCTION && m < SPARK_CLOSE))
-      .sort((a, b) => a[0] - b[0])
-    for (const [m, pair] of rows) {
-      pushFlow(m, [pair[0], pair[1]], 'taishin')
-      taishinMinutes++
-    }
-  }
+  const yLast = yRows.length ? yRows.reduce((x, y) => (y[0] > x[0] ? y : x)) : null
 
   const q = ext?.quote ?? null
   const meta = useLive ? live : undefined
@@ -1409,7 +1468,10 @@ function buildSpark(
       filledPoints: fills.length,
       carriedPoints: carried.size,
       taishinMinutes,
+      yahooMinutes,
       estMinutes,
+      yahooNet: yLast ? yLast[1][0] - yLast[1][1] : null,
+      yahooAt: yLast ? hms(yLast[0]) : null,
       cnyesBars: ext?.cnyes ?? 0,
       yahooBars: ext?.yahoo ?? 0,
     },

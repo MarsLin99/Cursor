@@ -79,8 +79,8 @@ function flowRows(book?: SparkBook): FlowRow[] {
     let running = 0
     return book.flow.map((row) => {
       const net = row.net ?? row.out - row.inn
-      running += net
-      return { minute: Math.floor(minuteOf(row.t)), out: row.out, inn: row.inn, net, cum: running, est: row.src === 'est' }
+      running = row.cum ?? running + net
+      return { minute: Math.floor(minuteOf(row.t)), out: row.out, inn: row.inn, net, cum: running, est: row.src !== 'taishin' }
     })
   }
   // 舊格式只有累積序列：每分鐘取最後一筆
@@ -186,7 +186,7 @@ function Spark({
 
   // 買賣力：每一條＝那一分鐘的（外盤−內盤）張數差，正的往上紅、負的往下綠，依當天單分鐘最大絕對值縮放
   const rows = flowRows(book)
-  const maxAbs = Math.max(1, ...rows.map((row) => Math.abs(row.net)))
+  const maxAbs = Math.max(1, ...rows.map((row) => Math.abs(row.cum)))
   const slot = plotW / (SESSION_END - SESSION_START)
   const barW = Math.max(slot * 0.85, 0.8)
   const gradId = `spark-fill-${item.symbol}`
@@ -306,16 +306,17 @@ function Spark({
 
           <line x1={PAD.l} x2={width - PAD.r} y1={mid} y2={mid} className="zero" />
           {rows.map((row) => {
-            const h = (Math.abs(row.net) / maxAbs) * (volH / 2)
+            // 每一條＝開盤到這一分鐘的累積（外盤−內盤）張數（同台新 App 的內外盤差）
+            const h = (Math.abs(row.cum) / maxAbs) * (volH / 2)
             const x = xOfMinute(row.minute) - slot / 2
             return (
               <rect
                 key={row.minute}
                 x={x}
-                y={row.net >= 0 ? mid - h : mid}
+                y={row.cum >= 0 ? mid - h : mid}
                 width={barW}
                 height={Math.max(h, 0.5)}
-                className={row.net >= 0 ? 'force-bar up' : 'force-bar down'}
+                className={row.cum >= 0 ? 'force-bar up' : 'force-bar down'}
               />
             )
           })}

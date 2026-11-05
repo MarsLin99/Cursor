@@ -107,7 +107,9 @@ export type SparkFlow = {
   inn: number
   /** 這一分鐘（外盤−內盤）張數差＝買賣力條狀圖那一條 */
   net?: number
-  src: 'taishin' | 'mis' | 'est'
+  /** 開盤到這一分鐘的累積（外盤−內盤）張數＝買賣力條狀圖那一條 */
+  cum?: number
+  src: 'taishin' | 'yahoo' | 'mis' | 'est'
 }
 
 /** 台新行情累積的當日走勢。漲跌停與開盤在盤中固定。 */
@@ -139,7 +141,11 @@ export type SparkBook = {
     /** 沒有成交的分鐘沿用上一筆價補的點數 */
     carriedPoints?: number
     taishinMinutes: number
+    yahooMinutes?: number
     estMinutes: number
+    /** Yahoo 最新累積（外盤−內盤）與其時間，供對照 */
+    yahooNet?: number | null
+    yahooAt?: string | null
     cnyesBars: number
     yahooBars: number
   }

@@ -210,6 +210,81 @@ async function loop(step: () => Promise<void>, gap: number) {
   }
 }
 
+// ---------- Yahoo 累積外盤／內盤（outMarket／inMarket）----------
+// 平日 08:55～13:35 每 3 秒抓一次自選股的 Yahoo 累積外盤、內盤張數，依 Yahoo 報價時間存成每分鐘最後一筆，
+// 每天寫進 data/yahoo-flow.json。走勢圖在台新還沒逐筆的分鐘（晚訂閱）先用它，也拿來和台新對照。
+type YahooFile = { date: string; flow: Record<string, Record<string, [number, number]>> }
+const YAHOO_GAP_MS = 3000
+let yahooFile = ''
+let yahoo: YahooFile = { date: '', flow: {} }
+let yahooDirty = false
+
+function yahooWindow(now = Date.now()) {
+  const { hm, weekday } = taipeiParts(now)
+  return weekday !== 'Sat' && weekday !== 'Sun' && hm >= '08:55' && hm <= '13:35'
+}
+
+type YahooRow = { symbol?: string; outMarket?: unknown; inMarket?: unknown; regularMarketTime?: string }
+
+async function yahooOnce() {
+  const list = watched()
+  if (!list.size) return
+  const symbols = [...list].map(([symbol, market]) => `${symbol}.${market === 'tpex' ? 'TWO' : 'TW'}`)
+  const url =
+    'https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.stockList;fields=avgPrice%2Corderbook;symbols=' +
+    encodeURIComponent(symbols.join(','))
+  const rows = await getJson<YahooRow[]>(url)
+  if (!Array.isArray(rows)) return
+  for (const row of rows) {
+    const symbol = String(row.symbol ?? '').split('.')[0].toUpperCase()
+    const out = num(row.outMarket)
+    const inn = num(row.inMarket)
+    const at = Date.parse(String(row.regularMarketTime ?? ''))
+    if (!symbol || out == null || inn == null || !Number.isFinite(at)) continue
+    const { date, hm } = taipeiParts(at)
+    if (hm < '09:00' || hm > '13:30') continue
+    if (date !== yahoo.date) yahoo = { date, flow: {} }
+    const minutes = (yahoo.flow[symbol] ??= {})
+    const last = minutes[hm]
+    if (!last || last[0] !== out || last[1] !== inn) {
+      minutes[hm] = [out, inn]
+      yahooDirty = true
+    }
+  }
+}
+
+async function saveYahoo() {
+  if (!yahooDirty || !yahooFile) return
+  yahooDirty = false
+  try {
+    const { rename } = await import('node:fs/promises')
+    await writeFile(`${yahooFile}.tmp`, JSON.stringify(yahoo))
+    await rename(`${yahooFile}.tmp`, yahooFile)
+  } catch {
+    yahooDirty = true
+  }
+}
+
+async function yahooLoop() {
+  for (;;) {
+    if (yahooWindow()) {
+      try {
+        await yahooOnce()
+      } catch {
+        /* 下一輪再試 */
+      }
+      await sleep(YAHOO_GAP_MS)
+    } else {
+      await sleep(20_000)
+    }
+  }
+}
+
+/** 某檔某天 Yahoo 每分鐘最後看到的累積 [外盤, 內盤] 張數 {"HH:MM": [外, 內]} */
+export function yahooFlow(symbol: string, date: string) {
+  return yahoo.date === date ? (yahoo.flow[symbol] ?? {}) : {}
+}
+
 export async function startFlowSampler(dataDir: string) {
   if (started) return
   started = true
@@ -220,6 +295,16 @@ export async function startFlowSampler(dataDir: string) {
   } catch {
     /* 第一次啟動 */
   }
+  yahooFile = path.join(dataDir, 'yahoo-flow.json')
+  try {
+    const saved = JSON.parse(await readFile(yahooFile, 'utf8')) as YahooFile
+    if (saved && typeof saved === 'object' && saved.flow) yahoo = saved
+  } catch {
+    /* 第一次啟動 */
+  }
+  void yahooLoop()
+  const yahooTimer = setInterval(() => void saveYahoo(), 10_000)
+  yahooTimer.unref?.()
   void loop(refreshBook, BOOK_GAP_MS)
   void loop(sampleOnce, QUOTE_GAP_MS)
   const timer = setInterval(() => void save(), 10_000)
