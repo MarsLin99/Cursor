@@ -7,6 +7,8 @@ import type {
   MacroSnapshot,
   QuoteRow,
   SparkBook,
+  SparkFlow,
+  SparkForce,
   TickerItem,
   WinPick,
 } from '../src/desk/types.ts'
@@ -798,15 +800,15 @@ async function taishinLiveStatus() {
   }
 }
 
-function sparkSymbols(raw: string) {
-  return [
-    ...new Set(
-      raw
-        .split(',')
-        .map((part) => part.split(':')[0]?.trim().toUpperCase() ?? '')
-        .filter((symbol) => /^[0-9A-Z]{4,6}$/.test(symbol)),
-    ),
-  ]
+function sparkItems(raw: string) {
+  const seen = new Map<string, 'twse' | 'tpex'>()
+  for (const part of raw.split(',')) {
+    const [code, market] = part.split(':')
+    const symbol = (code ?? '').trim().toUpperCase()
+    if (!/^[0-9A-Z]{4,6}$/.test(symbol) || seen.has(symbol)) continue
+    seen.set(symbol, (market ?? '').trim().toLowerCase() === 'tpex' ? 'tpex' : 'twse')
+  }
+  return [...seen].map(([symbol, market]) => ({ symbol, market }))
 }
 
 // 台新訂閱名單：任何畫面（走勢圖勾選或報價列表）10 分鐘內要過的代號都保留，
@@ -833,26 +835,6 @@ function taipeiDate(now = new Date()) {
     month: '2-digit',
     day: '2-digit',
   }).format(now)
-}
-
-function previousWeekday(iso: string) {
-  const [year, month, day] = iso.split('-').map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day))
-  do {
-    date.setUTCDate(date.getUTCDate() - 1)
-  } while (date.getUTCDay() === 0 || date.getUTCDay() === 6)
-  return date.toISOString().slice(0, 10)
-}
-
-function applyTechForce(book: SparkBook, tech: SparkForceFile | null, sessionDate: string) {
-  if (!tech?.date || !tech.symbols) return book
-  const clock = taipeiClock()
-  const beforeOpen = clock.weekday === 'Sat' || clock.weekday === 'Sun' || clock.mins < 9 * 60
-  const visible = tech.date === sessionDate || (beforeOpen && tech.date === previousWeekday(taipeiDate()))
-  if (!visible) return book
-  const row = tech.symbols[book.symbol]
-  if (!row?.force?.length) return book
-  return { ...book, bias: row.bias ?? book.bias, force: row.force, forceDate: tech.date }
 }
 
 function overlaySpark(rows: QuoteRow[], live: Record<string, SparkBook>) {
@@ -959,31 +941,361 @@ export async function fetchIntraday(symbol: string, market: 'twse' | 'tpex') {
   return []
 }
 
-const minuteCache = new Map<string, { at: number; bars: IntradayBar[] }>()
+// ── 走勢圖資料：台新逐筆優先，缺的分鐘用鉅亨一分K、再用 Yahoo 一分K 補 ──
 
-async function cachedIntraday(symbol: string) {
-  const hit = minuteCache.get(symbol)
-  if (hit && Date.now() - hit.at < 3 * 60 * 1000) return hit.bars
-  const bars = await fetchIntraday(symbol, 'twse')
-  minuteCache.set(symbol, { at: Date.now(), bars })
+/** quote_bridge 另外記錄每分鐘外盤／內盤張數 {"HH:MM": [外盤, 內盤]} */
+type LiveSparkBook = SparkBook & { minutes?: Record<string, [number, number]> }
+
+type MinuteBar = { m: number; o: number; h: number; l: number; c: number; v: number }
+type DatedBar = MinuteBar & { date: string }
+
+type ExternalQuote = {
+  name: string | null
+  price: number | null
+  high: number | null
+  low: number | null
+  prev: number | null
+  limitUp: number | null
+  limitDown: number | null
+  volume: number | null
+}
+
+type ExternalDay = {
+  date: string
+  bars: MinuteBar[]
+  cnyes: number
+  yahoo: number
+  quote: ExternalQuote | null
+}
+
+const SPARK_OPEN = 9 * 60
+const SPARK_CLOSE = 13 * 60 + 30
+const EXTERNAL_TTL_MS = 30_000
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
+
+function finiteOf(value: unknown) {
+  if (value == null || value === '') return null
+  const n = typeof value === 'string' ? Number(value.replace(/,/g, '')) : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function taipeiMinute(sec: number) {
+  const d = new Date((sec + 8 * 3600) * 1000)
+  return { date: d.toISOString().slice(0, 10), m: d.getUTCHours() * 60 + d.getUTCMinutes() }
+}
+
+function hms(m: number) {
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:00`
+}
+
+function stampMinute(stamp: string) {
+  const [h, m] = stamp.split(':').map(Number)
+  return h * 60 + m
+}
+
+function stampSeconds(stamp: string) {
+  const [h, m, s] = stamp.split(':').map(Number)
+  return h * 3600 + m * 60 + (s || 0)
+}
+
+function inSparkSession(m: number) {
+  return m >= SPARK_OPEN && m <= SPARK_CLOSE
+}
+
+async function getJsonFrom<T>(url: string, referer: string): Promise<T> {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json, text/plain, */*', Referer: referer },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!res.ok) throw new Error(`${res.status} ${url}`)
+  return (await res.json()) as T
+}
+
+type CnyesChart = {
+  data?: {
+    t?: number[]
+    o?: (number | null)[]
+    h?: (number | null)[]
+    l?: (number | null)[]
+    c?: (number | null)[]
+    v?: (number | null)[]
+    quote?: Record<string, unknown>
+  }
+}
+
+/** 鉅亨一分K（成交量單位：張），附帶即時報價欄位 6 成交、12 高、13 低、21 昨收、75/76 漲跌停 */
+async function fetchCnyesMinutes(symbol: string, market: 'twse' | 'tpex') {
+  const code = `${market === 'tpex' ? 'OTC' : 'TWS'}:${symbol}:STOCK`
+  const json = await getJsonFrom<CnyesChart>(
+    `https://ws.api.cnyes.com/ws/api/v1/charting/history?resolution=1&symbol=${encodeURIComponent(code)}&quote=1`,
+    'https://invest.cnyes.com/',
+  )
+  const data = json.data ?? {}
+  const bars: DatedBar[] = []
+  const times = data.t ?? []
+  for (let i = 0; i < times.length; i++) {
+    const c = finiteOf(data.c?.[i])
+    if (c == null) continue
+    let sec = Number(times[i])
+    if (sec > 1e10) sec = Math.floor(sec / 1000)
+    const { date, m } = taipeiMinute(sec)
+    bars.push({
+      date,
+      m,
+      o: finiteOf(data.o?.[i]) ?? c,
+      h: finiteOf(data.h?.[i]) ?? c,
+      l: finiteOf(data.l?.[i]) ?? c,
+      c,
+      v: finiteOf(data.v?.[i]) ?? 0,
+    })
+  }
+  const q = data.quote ?? {}
+  const quote: ExternalQuote = {
+    name: typeof q['200009'] === 'string' ? (q['200009'] as string) : null,
+    price: finiteOf(q['6']),
+    high: finiteOf(q['12']),
+    low: finiteOf(q['13']),
+    prev: finiteOf(q['21']),
+    limitUp: finiteOf(q['75']),
+    limitDown: finiteOf(q['76']),
+    volume: finiteOf(q['800001']),
+  }
+  return { bars, quote }
+}
+
+type YahooChart = {
+  chart?: {
+    result?: {
+      timestamp?: number[]
+      indicators?: {
+        quote?: {
+          open?: (number | null)[]
+          high?: (number | null)[]
+          low?: (number | null)[]
+          close?: (number | null)[]
+          volume?: (number | null)[]
+        }[]
+      }
+    }[]
+  }
+}
+
+/** Yahoo 一分K（成交量是股，換成張） */
+async function fetchYahooMinutes(symbol: string, market: 'twse' | 'tpex') {
+  const suffix = market === 'tpex' ? 'TWO' : 'TW'
+  const json = await getJsonFrom<YahooChart>(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(`${symbol}.${suffix}`)}?interval=1m&range=1d&includePrePost=false`,
+    'https://finance.yahoo.com/',
+  )
+  const result = json.chart?.result?.[0]
+  const times = result?.timestamp ?? []
+  const q = result?.indicators?.quote?.[0]
+  const bars: DatedBar[] = []
+  for (let i = 0; i < times.length; i++) {
+    const c = finiteOf(q?.close?.[i])
+    if (c == null) continue
+    const { date, m } = taipeiMinute(Number(times[i]))
+    bars.push({
+      date,
+      m,
+      o: finiteOf(q?.open?.[i]) ?? c,
+      h: finiteOf(q?.high?.[i]) ?? c,
+      l: finiteOf(q?.low?.[i]) ?? c,
+      c,
+      v: (finiteOf(q?.volume?.[i]) ?? 0) / 1000,
+    })
+  }
   return bars
 }
 
-/** 台新訂閱只回補最新一筆。盤中沒連上的時段，用當日一分K補股價，不補內外盤。 */
-function withSessionPath(book: SparkBook, bars: IntradayBar[]): SparkBook {
-  const live = book.points ?? []
-  const minutes = bars.map((bar) => ({
-    t: bar.time.length === 5 ? `${bar.time}:00` : bar.time,
-    p: bar.close,
-  }))
-  if (!minutes.length) return book
-  if (live.length > 1 && live[0].t <= '09:05:00') return book
-  if (live.length <= 1) return { ...book, points: minutes }
-  const earlier = minutes.filter((point) => point.t < live[0].t)
-  if (!earlier.length) return book
-  return { ...book, points: [...earlier, ...live] }
+async function loadExternalDay(symbol: string, market: 'twse' | 'tpex'): Promise<ExternalDay | null> {
+  const [cnyes, yahoo] = await Promise.all([
+    fetchCnyesMinutes(symbol, market).catch(() => null),
+    fetchYahooMinutes(symbol, market).catch(() => [] as DatedBar[]),
+  ])
+  const cnyesBars = cnyes?.bars ?? []
+  const date = [...cnyesBars, ...yahoo].reduce((best, bar) => (bar.date > best ? bar.date : best), '')
+  if (!date) return cnyes ? { date: '', bars: [], cnyes: 0, yahoo: 0, quote: cnyes.quote } : null
+  // 以分鐘對齊：鉅亨優先，鉅亨缺的分鐘用 Yahoo 補
+  const byMinute = new Map<number, MinuteBar>()
+  const strip = ({ m, o, h, l, c, v }: DatedBar): MinuteBar => ({ m, o, h, l, c, v })
+  for (const bar of yahoo) if (bar.date === date && inSparkSession(bar.m)) byMinute.set(bar.m, strip(bar))
+  let fromCnyes = 0
+  for (const bar of cnyesBars) {
+    if (bar.date !== date || !inSparkSession(bar.m)) continue
+    byMinute.set(bar.m, strip(bar))
+    fromCnyes++
+  }
+  return {
+    date,
+    bars: [...byMinute.values()].sort((a, b) => a.m - b.m),
+    cnyes: fromCnyes,
+    yahoo: Math.max(0, byMinute.size - fromCnyes),
+    quote: cnyes?.quote ?? null,
+  }
 }
 
+const externalCache = new Map<string, { at: number; value: ExternalDay | null; pending?: Promise<ExternalDay | null> }>()
+
+/** 外部一分K每檔快取 30 秒，同時多個請求共用同一次抓取 */
+async function externalDay(symbol: string, market: 'twse' | 'tpex') {
+  const key = `${symbol}:${market}`
+  const hit = externalCache.get(key)
+  if (hit && Date.now() - hit.at < EXTERNAL_TTL_MS) return hit.value
+  if (hit?.pending) return hit.pending
+  const pending = (async () => {
+    let value: ExternalDay | null = null
+    try {
+      value = await loadExternalDay(symbol, market)
+      if (!value?.bars.length) {
+        const other = await loadExternalDay(symbol, market === 'twse' ? 'tpex' : 'twse')
+        if (other?.bars.length) value = other
+      }
+    } catch {
+      value = null
+    }
+    const keep = value?.bars.length ? value : (hit?.value ?? value)
+    externalCache.set(key, { at: Date.now(), value: keep })
+    return keep
+  })()
+  externalCache.set(key, { at: hit?.at ?? 0, value: hit?.value ?? null, pending })
+  return pending
+}
+
+/** 一分K估內外盤：收盤越靠近最高，外盤越多；平盤各半（同參考程式 split_by_close） */
+function splitByClose(bar: MinuteBar): [number, number] {
+  const volume = bar.v > 0 ? bar.v : 0
+  const span = bar.h - bar.l
+  if (volume <= 0 || !(span > 0)) return [volume / 2, volume / 2]
+  const outer = Math.min(Math.max((volume * (bar.c - bar.l)) / span, 0), volume)
+  return [outer, volume - outer]
+}
+
+/** 累積張數差序列 → 每分鐘淨張數。strict 時第一分鐘（基準不明）與斷線超過 3 分鐘後的那一分鐘不採用 */
+function minuteNets(series: SparkForce[] | undefined, fromZero: boolean) {
+  const nets = new Map<number, number>()
+  if (!series?.length) return nets
+  const sorted = [...series].sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+  let baseD: number | null = fromZero ? 0 : null
+  let baseSec: number | null = fromZero ? SPARK_OPEN * 60 : null
+  let i = 0
+  while (i < sorted.length) {
+    const m = stampMinute(sorted[i].t)
+    const firstSec = stampSeconds(sorted[i].t)
+    let j = i
+    while (j + 1 < sorted.length && stampMinute(sorted[j + 1].t) === m) j++
+    const lastD = sorted[j].d
+    if (baseD != null && baseSec != null && (fromZero || firstSec - baseSec <= 180)) nets.set(m, lastD - baseD)
+    baseD = lastD
+    baseSec = stampSeconds(sorted[j].t)
+    i = j + 1
+  }
+  return nets
+}
+
+function buildSpark(
+  symbol: string,
+  live: LiveSparkBook | undefined,
+  liveDate: string,
+  ext: ExternalDay | null,
+  tech: SparkForceFile | null,
+): SparkBook | null {
+  const today = taipeiDate()
+  const liveToday = live != null && (liveDate === today || liveDate === today.replace(/-/g, ''))
+  const livePoints = liveToday
+    ? (live.points ?? []).filter((point) => inSparkSession(stampMinute(point.t)))
+    : []
+  // 盤中以今天為準；開盤前台新還沒有今天的成交，就顯示外部來源最近一個交易日
+  const sessionDate = livePoints.length ? today : ext?.date || (liveToday ? today : '')
+  const useLive = liveToday && sessionDate === today
+  const extBars = ext && ext.date === sessionDate ? ext.bars : []
+  if (!useLive && !extBars.length && !live) return null
+
+  // 股價：台新逐筆點為主；台新沒有點的分鐘，用一分K收盤補
+  const covered = new Set(livePoints.map((point) => stampMinute(point.t)))
+  const fills = extBars.filter((bar) => !covered.has(bar.m)).map((bar) => ({ t: hms(bar.m), p: bar.c }))
+  const points = [...livePoints, ...fills].sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+
+  // 買賣力：每分鐘外盤、內盤。台新優先（逐分桶 → 技術指標歷史 → 累積差），否則用一分K估
+  const extMap = new Map(extBars.map((bar) => [bar.m, bar]))
+  const liveMinutes = useLive ? (live?.minutes ?? {}) : {}
+  const liveNets = useLive ? minuteNets(live?.force, false) : new Map<number, number>()
+  const techRow = tech?.date === sessionDate ? tech?.symbols?.[symbol] : undefined
+  const techNets = minuteNets(techRow?.force, true)
+  const minutes = new Set<number>()
+  for (const bar of extBars) minutes.add(bar.m)
+  for (const key of Object.keys(liveMinutes)) minutes.add(stampMinute(key))
+  for (const m of liveNets.keys()) minutes.add(m)
+  for (const m of techNets.keys()) minutes.add(m)
+  for (const m of covered) minutes.add(m)
+
+  const flow: SparkFlow[] = []
+  const force: SparkForce[] = []
+  let cum = 0
+  let taishinMinutes = 0
+  let estMinutes = 0
+  for (const m of [...minutes].filter(inSparkSession).sort((a, b) => a - b)) {
+    const bar = extMap.get(m)
+    const vol = bar?.v ?? 0
+    // 台新該分鐘只收到一部分（剛訂閱、斷線重連）時，張數會和一分K量差很多，改用估計
+    const fitsTotal = (total: number) => !bar || vol <= 0 || (total >= vol * 0.5 && total <= vol * 1.5)
+    const fitsNet = (net: number) => !bar || vol <= 0 || Math.abs(net) <= vol * 1.5
+    const fromNet = (net: number): [number, number] =>
+      bar && vol >= Math.abs(net) ? [(vol + net) / 2, (vol - net) / 2] : [Math.max(net, 0), Math.max(-net, 0)]
+    let pair: [number, number] | null = null
+    let src: SparkFlow['src'] = 'taishin'
+    const bucket = liveMinutes[hms(m).slice(0, 5)]
+    if (bucket) {
+      if (fitsTotal(bucket[0] + bucket[1])) pair = [bucket[0], bucket[1]]
+    } else if (techNets.has(m) && fitsNet(techNets.get(m)!)) {
+      pair = fromNet(techNets.get(m)!)
+    } else if (liveNets.has(m) && fitsNet(liveNets.get(m)!)) {
+      pair = fromNet(liveNets.get(m)!)
+    }
+    if (!pair && bar) {
+      pair = splitByClose(bar)
+      src = 'est'
+    }
+    if (!pair) continue
+    if (src === 'taishin') taishinMinutes++
+    else estMinutes++
+    cum += pair[0] - pair[1]
+    flow.push({ t: hms(m), out: Math.round(pair[0] * 10) / 10, inn: Math.round(pair[1] * 10) / 10, src })
+    force.push({ t: hms(m), d: Math.round(cum) })
+  }
+
+  const q = ext?.quote ?? null
+  const meta = useLive ? live : undefined
+  const lastPoint = points.at(-1)
+  return {
+    symbol,
+    name: live?.name || q?.name || symbol,
+    limitUp: meta?.limitUp ?? q?.limitUp ?? null,
+    limitDown: meta?.limitDown ?? q?.limitDown ?? null,
+    open: meta?.open ?? extBars[0]?.o ?? null,
+    price: meta?.price ?? q?.price ?? lastPoint?.p ?? null,
+    prev: meta?.prev ?? q?.prev ?? null,
+    bid: meta?.bid ?? null,
+    ask: meta?.ask ?? null,
+    high: meta?.high ?? q?.high ?? null,
+    low: meta?.low ?? q?.low ?? null,
+    volume: meta?.volume ?? q?.volume ?? null,
+    time: meta?.time || lastPoint?.t || '',
+    bias: Math.round(cum),
+    points,
+    force,
+    flow,
+    forceDate: sessionDate || undefined,
+    sources: {
+      taishinPoints: livePoints.length,
+      filledPoints: fills.length,
+      taishinMinutes,
+      estMinutes,
+      cnyesBars: ext?.cnyes ?? 0,
+      yahooBars: ext?.yahoo ?? 0,
+    },
+  }
+}
 async function loadKey() {
   if (process.env.XAI_API_KEY?.trim()) return process.env.XAI_API_KEY.trim()
   try {
@@ -1242,25 +1554,25 @@ export function attachBoard(middlewares: {
         return
       }
       if (url.pathname === '/api/board/spark' && req.method === 'GET') {
-        const symbols = sparkSymbols(url.searchParams.get('items') ?? '')
-        await rememberSparkWatch(symbols)
-        const saved = await readJson<SparkLiveFile>(sparkLiveFile)
-        const live = saved?.symbols ?? {}
-        const tech = await readJson<SparkForceFile>(sparkForceFile)
-        const books = symbols
-          .map((symbol) => live[symbol])
-          .filter((book): book is SparkBook => book != null)
-        const filled = await Promise.all(
-          books.map(async (book) => {
-            const livePoints = book.points ?? []
-            const priced =
-              livePoints.length > 1 && livePoints[0].t <= '09:05:00'
-                ? book
-                : await withSessionPath(book, await cachedIntraday(book.symbol).catch(() => []))
-            return applyTechForce(priced, tech, saved?.date ?? '')
-          }),
+        const wanted = sparkItems(url.searchParams.get('items') ?? '')
+        await rememberSparkWatch(wanted.map((item) => item.symbol))
+        const [saved, tech] = await Promise.all([
+          readJson<SparkLiveFile>(sparkLiveFile),
+          readJson<SparkForceFile>(sparkForceFile),
+        ])
+        const live = (saved?.symbols ?? {}) as Record<string, LiveSparkBook>
+        const books = await Promise.all(
+          wanted.map(async (item) =>
+            buildSpark(
+              item.symbol,
+              live[item.symbol],
+              saved?.date ?? '',
+              await externalDay(item.symbol, item.market).catch(() => null),
+              tech,
+            ),
+          ),
         )
-        send(res, 200, filled)
+        send(res, 200, books.filter((book): book is SparkBook => book != null))
         return
       }
       if (url.pathname === '/api/board/ticker' && req.method === 'GET') {

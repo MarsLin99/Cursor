@@ -95,6 +95,8 @@ export type IntradayBar = {
 
 export type SparkPoint = { t: string; p: number }
 export type SparkForce = { t: string; d: number }
+/** 每分鐘外盤／內盤張數。taishin＝台新逐筆，est＝依一分K收盤位置估計 */
+export type SparkFlow = { t: string; out: number; inn: number; src: 'taishin' | 'est' }
 
 /** 台新行情累積的當日走勢。漲跌停與開盤在盤中固定。 */
 export type SparkBook = {
@@ -116,4 +118,15 @@ export type SparkBook = {
   force: SparkForce[]
   /** 買賣力道資料的日期（YYYY-MM-DD），開盤前可能是前一交易日 */
   forceDate?: string
+  /** 每分鐘買賣力（force 為其累積） */
+  flow?: SparkFlow[]
+  /** 資料來源統計：台新點數、補點數、台新／估計分鐘數 */
+  sources?: {
+    taishinPoints: number
+    filledPoints: number
+    taishinMinutes: number
+    estMinutes: number
+    cnyesBars: number
+    yahooBars: number
+  }
 }

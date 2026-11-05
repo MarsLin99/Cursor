@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { resolveStockQuery, searchStocks, type StockHit } from '../lib/marketData'
 import type { DeskSlots } from './DeskApp'
 import { fmt, signed, tone } from './format'
-import type { MacroSnapshot, QuoteRow, SparkBook, TickerItem } from './types'
+import type { MacroSnapshot, QuoteRow, SparkBook, SparkPoint, TickerItem } from './types'
 
 type Item = {
   symbol: string
@@ -36,6 +36,9 @@ function loadItems(): Item[] {
 
 const SESSION_START = 9 * 60
 const SESSION_END = 13 * 60 + 30
+const CHART_H = 320
+const PAD = { l: 72, r: 12, t: 8, b: 18 }
+const AXIS_MARKS = [9 * 60, 10 * 60, 11 * 60, 12 * 60, 13 * 60, SESSION_END]
 
 function priceBand(book?: SparkBook) {
   const prev = book?.prev
@@ -56,6 +59,69 @@ function minuteOf(stamp: string) {
   return hour * 60 + minute + (second || 0) / 60
 }
 
+/** 價格去掉多餘的 0：2485、30.4、7.71 */
+function formatPrice(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return '—'
+  return value.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+}
+
+function signedPrice(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${value > 0 ? '+' : ''}${formatPrice(value)}`
+}
+
+function signedLots(value: number) {
+  const n = Math.round(value)
+  return `${n > 0 ? '+' : ''}${n.toLocaleString('zh-TW')}`
+}
+
+function clockOf(minute: number) {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+}
+
+type FlowRow = { minute: number; net: number; cum: number; est: boolean }
+
+/** 每分鐘淨張數（外盤−內盤）與累積買賣力 */
+function flowRows(book?: SparkBook): FlowRow[] {
+  if (book?.flow?.length) {
+    let running = 0
+    return book.flow.map((row) => {
+      const net = row.out - row.inn
+      running += net
+      return { minute: Math.floor(minuteOf(row.t)), net, cum: running, est: row.src === 'est' }
+    })
+  }
+  // 舊格式只有累積序列：每分鐘取最後一筆
+  const byMinute = new Map<number, number>()
+  for (const point of book?.force ?? []) byMinute.set(Math.floor(minuteOf(point.t)), point.d)
+  let prevD = 0
+  return [...byMinute.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([minute, d]) => {
+      const net = d - prevD
+      prevD = d
+      return { minute, net, cum: d, est: false }
+    })
+}
+
+/** 超過 2 分鐘沒有成交就斷線，不用斜線硬接 */
+function segmentsOf(points: SparkPoint[], maxGapSec = 120) {
+  const out: SparkPoint[][] = []
+  let current: SparkPoint[] = []
+  let lastSec = -Infinity
+  for (const point of points) {
+    const sec = minuteOf(point.t) * 60
+    if (current.length && sec - lastSec > maxGapSec) {
+      out.push(current)
+      current = []
+    }
+    current.push(point)
+    lastSec = sec
+  }
+  if (current.length) out.push(current)
+  return out
+}
+
 function Spark({
   item,
   quote,
@@ -68,6 +134,7 @@ function Spark({
   // 依卡片實際寬度畫圖，避免 SVG 等比縮放後兩側留白
   const svgRef = useRef<SVGSVGElement>(null)
   const [width, setWidth] = useState(320)
+  const [hoverX, setHoverX] = useState<number | null>(null)
   useEffect(() => {
     const el = svgRef.current
     if (!el) return
@@ -80,142 +147,210 @@ function Spark({
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  const height = 320
-  const plotLeft = 60
-  const priceTop = 10
-  const priceH = 200
-  const forceTop = 228
-  const forceH = 84
+
+  const height = CHART_H
+  const plotW = Math.max(40, width - PAD.l - PAD.r)
+  const volH = Math.max(24, Math.round((height - PAD.t - PAD.b) * 0.18))
+  const priceTop = PAD.t
+  const priceBottom = height - PAD.b - volH - 6
+  const volTop = priceBottom + 8
+  const mid = volTop + volH / 2
+  const xOfMinute = (minute: number) =>
+    PAD.l + ((Math.min(SESSION_END, Math.max(SESSION_START, minute)) - SESSION_START) / (SESSION_END - SESSION_START)) * plotW
+  const xOf = (stamp: string) => xOfMinute(minuteOf(stamp))
+
+  const points = book?.points ?? []
   const band = priceBand(book)
-  const limitUp = band?.up ?? null
-  const limitDown = band?.down ?? null
+  // Y 軸固定在漲停／跌停，整天不變；超出範圍（無漲跌幅限制的標的）才放寬
+  let top = band?.up ?? null
+  let bottom = band?.down ?? null
+  if (points.length) {
+    const hi = Math.max(...points.map((point) => point.p))
+    const lo = Math.min(...points.map((point) => point.p))
+    top = top == null ? hi : Math.max(top, hi)
+    bottom = bottom == null ? lo : Math.min(bottom, lo)
+  }
+  if (top != null && bottom != null && top === bottom) {
+    top += 1
+    bottom -= 1
+  }
+  const ready = top != null && bottom != null && top > bottom
+  const yOf = (value: number) => priceTop + ((top! - value) / (top! - bottom!)) * (priceBottom - priceTop)
+
   const open = book?.open ?? quote?.open ?? null
   const price = book?.price ?? quote?.price ?? null
-  const change = quote?.change ?? (price != null && book?.prev != null ? price - book.prev : null)
-  const ready = limitUp != null && limitDown != null && limitUp > limitDown
-  const span = ready ? limitUp - limitDown : 1
-  const xOf = (stamp: string) => {
-    const minute = minuteOf(stamp)
-    const clamped = Math.min(SESSION_END, Math.max(SESSION_START, minute))
-    return plotLeft + ((clamped - SESSION_START) / (SESSION_END - SESSION_START)) * (width - plotLeft)
-  }
-  const yOf = (value: number) => priceTop + ((limitUp! - value) / span) * priceH
-  const points = book?.points ?? []
-  const line = points.map((point) => `${xOf(point.t)},${yOf(point.p)}`).join(' ')
+  const prev = book?.prev ?? quote?.prev ?? null
+  const change = price != null && prev != null ? price - prev : (quote?.change ?? null)
+  const pct = change != null && prev ? (change / prev) * 100 : (quote?.pct ?? null)
   const last = points.at(-1)
-  const rising = (change ?? 0) >= 0
-  const force = book?.force ?? []
-  const extreme = Math.max(...force.map((point) => Math.abs(point.d)), 1)
-  const yForce = (value: number) => forceTop + ((extreme - value) / (extreme * 2)) * forceH
-  // 每分鐘取最後一筆累積內外盤張數差，畫成以 0 為基準的條狀圖
-  const forceBars = [
-    ...force
-      .reduce((byMinute, point) => {
-        byMinute.set(Math.min(SESSION_END, Math.max(SESSION_START, minuteOf(point.t))), point)
-        return byMinute
-      }, new Map<number, (typeof force)[number]>())
-      .values(),
-  ]
-  const barW = Math.max(0.6, ((width - plotLeft) / (SESSION_END - SESSION_START)) * 0.8)
-  // 條狀圖：每分鐘外盤減內盤的淨張數；折線：累積張數差
-  const minuteNet = forceBars.map((point, i) => ({ t: point.t, d: point.d, net: point.d - (i > 0 ? forceBars[i - 1].d : 0) }))
-  const netExtreme = Math.max(...minuteNet.map((point) => Math.abs(point.net)), 1)
-  const yNet = (value: number) => forceTop + ((netExtreme - value) / (netExtreme * 2)) * forceH
-  const lastNet = minuteNet.at(-1)?.net ?? 0
+  const rising = last ? (prev != null ? last.p >= prev : last.p >= points[0].p) : (change ?? 0) >= 0
+  const lineTone = rising ? 'up' : 'down'
+  const segments = ready ? segmentsOf(points) : []
+  const pathOf = (segment: SparkPoint[]) =>
+    segment.map((point, i) => `${i ? 'L' : 'M'}${xOf(point.t).toFixed(1)},${yOf(point.p).toFixed(1)}`).join('')
+  const areaOf = (segment: SparkPoint[]) =>
+    `${pathOf(segment)}L${xOf(segment[segment.length - 1].t).toFixed(1)},${priceBottom}L${xOf(segment[0].t).toFixed(1)},${priceBottom}Z`
+
+  // 買賣力＝累積（外盤−內盤）張數，零軸上紅下綠
+  const rows = flowRows(book)
+  const maxAbs = Math.max(1, ...rows.map((row) => Math.abs(row.cum)))
+  const slot = plotW / (SESSION_END - SESSION_START)
+  const barW = Math.max(slot * 0.85, 0.8)
+  const gradId = `spark-fill-${item.symbol}`
   const todayTpe = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })
   const staleDate = book?.forceDate && book.forceDate !== todayTpe ? book.forceDate.slice(5).replace('-', '/') : null
-  const cumLine = forceBars.map((point) => `${xOf(point.t)},${yForce(point.d)}`).join(' ')
-  const bias = book?.bias ?? force.at(-1)?.d ?? 0
-  const digits = price != null && price >= 1000 ? 0 : 2
+
+  const markers = (
+    [
+      { price: band?.up ?? null, label: '漲停', cls: 'up' },
+      { price: open, label: '開盤', cls: 'open' },
+      { price: band?.down ?? null, label: '跌停', cls: 'down' },
+    ] as { price: number | null; label: string; cls: string }[]
+  ).filter((mark): mark is { price: number; label: string; cls: string } => ready && mark.price != null && Number.isFinite(mark.price))
+
+  let hover: { x: number; y: number; t: string; p: number; net: number | null; cum: number | null } | null = null
+  if (hoverX != null && ready && points.length && hoverX >= PAD.l && hoverX <= width - PAD.r) {
+    let best = points[0]
+    let bestD = Infinity
+    for (const point of points) {
+      const d = Math.abs(xOf(point.t) - hoverX)
+      if (d < bestD) {
+        bestD = d
+        best = point
+      }
+    }
+    const minute = Math.floor(minuteOf(best.t))
+    let upTo: FlowRow | undefined
+    let same: FlowRow | undefined
+    for (const row of rows) {
+      if (row.minute <= minute) upTo = row
+      if (row.minute === minute) same = row
+    }
+    hover = { x: xOf(best.t), y: yOf(best.p), t: best.t.slice(0, 5), p: best.p, net: same?.net ?? null, cum: upTo?.cum ?? null }
+  }
+  const flip = hover != null && hover.x > width * 0.58
+
   return (
     <article className="spark-card">
       <header>
-        <strong>
-          {item.symbol} {book?.name || item.name}
-        </strong>
-        <span className={tone(change)}>
-          {fmt(price, digits)}
-          <small>
-            {signed(change, digits)} {signed(book?.prev && change != null ? (change / book.prev) * 100 : quote?.pct ?? null)}%
-          </small>
-        </span>
+        <div className="spark-title">
+          <strong>
+            {item.symbol} {book?.name || item.name}
+          </strong>
+          <span className="market-tag">{item.market === 'tpex' ? '上櫃' : '上市'}</span>
+        </div>
+        <div className={`spark-price ${tone(change)}`}>
+          <b>{formatPrice(price)}</b>
+          <span>
+            {signedPrice(change)}  {pct == null ? '—' : `${signed(pct, 2)}%`}
+          </span>
+        </div>
       </header>
-      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${item.name} 當日走勢`}>
-        {ready ? (
-          <>
-            <line x1={plotLeft} x2={width} y1={yOf(limitUp)} y2={yOf(limitUp)} className="limit-up" />
-            <text x="0" y={yOf(limitUp)} dominantBaseline="middle" className="tag up">
-              漲停 {fmt(limitUp, digits)}
-            </text>
-            {open != null ? (
-              <>
-                <line x1={plotLeft} x2={width} y1={yOf(open)} y2={yOf(open)} className="open-line" />
-                <text x="0" y={yOf(open)} dominantBaseline="middle" className="tag open">
-                  開盤 {fmt(open, digits)}
+      <div className="spark-plot">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={`${item.name} 當日走勢`}
+          onPointerMove={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            setHoverX(((event.clientX - rect.left) / Math.max(1, rect.width)) * width)
+          }}
+          onPointerLeave={() => setHoverX(null)}
+        >
+          <defs>
+            <linearGradient id={gradId} x1="0" y1={priceTop} x2="0" y2={priceBottom} gradientUnits="userSpaceOnUse">
+              <stop offset="0" stopColor={rising ? '#c45c4a' : '#1f7a6c'} stopOpacity={0.22} />
+              <stop offset="1" stopColor="#fffcf5" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          {markers.map((mark) => {
+            const y = yOf(mark.price)
+            return (
+              <g key={mark.label}>
+                <line x1={PAD.l} x2={width - PAD.r} y1={y} y2={y} className={`mark ${mark.cls}`} />
+                <text
+                  x={PAD.l - 6}
+                  y={Math.min(priceBottom - 6, Math.max(priceTop + 6, y))}
+                  textAnchor="end"
+                  dominantBaseline="middle"
+                  className={`mark-label ${mark.cls}`}
+                >
+                  {mark.label} {formatPrice(mark.price)}
                 </text>
-              </>
-            ) : null}
-            <line x1={plotLeft} x2={width} y1={yOf(limitDown)} y2={yOf(limitDown)} className="limit-down" />
-            <text x="0" y={yOf(limitDown)} dominantBaseline="middle" className="tag down">
-              跌停 {fmt(limitDown, digits)}
+              </g>
+            )
+          })}
+          {AXIS_MARKS.map((minute) => (
+            <text key={minute} x={xOfMinute(minute)} y={height - 6} textAnchor="middle" className="axis">
+              {clockOf(minute)}
             </text>
-            {points.length > 1 ? (
-              <polyline points={line} className={rising ? 'price up' : 'price down'} />
-            ) : null}
-            {last ? <circle cx={xOf(last.t)} cy={yOf(last.p)} r="2.4" className={rising ? 'dot up' : 'dot down'} /> : null}
-          </>
-        ) : (
-          <text x="8" y="48" className="wait">
-            等待台新行情
+          ))}
+          {staleDate ? (
+            <text x={PAD.l + 4} y={priceTop + 10} className="stale">
+              {staleDate} 資料
+            </text>
+          ) : null}
+
+          <line x1={PAD.l} x2={width - PAD.r} y1={mid} y2={mid} className="zero" />
+          {rows.map((row) => {
+            const h = (Math.abs(row.cum) / maxAbs) * (volH / 2)
+            const x = xOfMinute(row.minute) - slot / 2
+            return (
+              <rect
+                key={row.minute}
+                x={x}
+                y={row.cum >= 0 ? mid - h : mid}
+                width={barW}
+                height={Math.max(h, 0.5)}
+                className={row.cum >= 0 ? 'force-bar up' : 'force-bar down'}
+              />
+            )
+          })}
+          <text x={PAD.l - 8} y={mid - 9} textAnchor="end" dominantBaseline="middle" className="side-label up">
+            買
           </text>
-        )}
-        <text x="0" y={forceTop + 4} dominantBaseline="middle" className="force-label">
-          本分 {signed(lastNet, 0)}
-        </text>
-        <text x="0" y={yForce(0)} dominantBaseline="middle" className="force-label">
-          累積 {signed(bias, 0)}
-        </text>
-        {staleDate ? (
-          <text x="0" y={forceTop + forceH - 3} dominantBaseline="middle" className="force-label stale">
-            {staleDate} 資料
+          <text x={PAD.l - 8} y={mid + 9} textAnchor="end" dominantBaseline="middle" className="side-label down">
+            賣
           </text>
+
+          {segments.map((segment) => (
+            <g key={segment[0].t}>
+              <path d={areaOf(segment)} fill={`url(#${gradId})`} stroke="none" />
+              <path d={pathOf(segment)} className={`line ${lineTone}`} />
+            </g>
+          ))}
+          {ready && last ? <circle cx={xOf(last.t)} cy={yOf(last.p)} r="3.2" className={`dot ${lineTone}`} /> : null}
+          {!points.length ? (
+            <text x={width / 2} y={(priceTop + priceBottom) / 2} textAnchor="middle" className="empty">
+              目前沒有成交資料
+            </text>
+          ) : null}
+
+          {hover ? (
+            <>
+              <line x1={hover.x} x2={hover.x} y1={priceTop} y2={volTop + volH} className="hover-line" />
+              <circle cx={hover.x} cy={hover.y} r="3.5" className={`dot ${lineTone}`} />
+            </>
+          ) : null}
+        </svg>
+        {hover ? (
+          <div
+            className="spark-tip"
+            style={{
+              left: flip ? undefined : hover.x + 12,
+              right: flip ? width - hover.x + 12 : undefined,
+              top: Math.min(Math.max(hover.y - 28, priceTop), priceBottom - 24),
+            }}
+          >
+            {`${hover.t}  ${formatPrice(hover.p)}  本分 ${hover.net == null ? '—' : signedLots(hover.net)}  買賣力 ${hover.cum == null ? '—' : signedLots(hover.cum)}`}
+          </div>
         ) : null}
-        <text x={width - 1} y={forceTop + 4} textAnchor="end" dominantBaseline="middle" className="force-axis">
-          {signed(extreme, 0)}
-        </text>
-        <text x={width - 1} y={forceTop + forceH - 3} textAnchor="end" dominantBaseline="middle" className="force-axis">
-          {signed(-extreme, 0)}
-        </text>
-        <line x1={plotLeft} x2={width} y1={yForce(0)} y2={yForce(0)} className="zero" />
-        {minuteNet.map((point) => {
-          const y0 = yNet(0)
-          const y = yNet(point.net)
-          return (
-            <rect
-              key={point.t}
-              x={xOf(point.t) - barW / 2}
-              y={Math.min(y, y0)}
-              width={barW}
-              height={Math.max(0.5, Math.abs(y - y0))}
-              className={point.net >= 0 ? 'force-bar up' : 'force-bar down'}
-            >
-              <title>{`${point.t.slice(0, 5)}  淨 ${signed(point.net, 0)} 張／累積 ${signed(point.d, 0)} 張`}</title>
-            </rect>
-          )
-        })}
-        {forceBars.length > 1 ? <polyline points={cumLine} className="force-cum" /> : null}
-      </svg>
-      <footer style={{ paddingLeft: `${(plotLeft / width) * 100}%` }}>
-        <span>09:00</span>
-        <span>10:00</span>
-        <span>11:00</span>
-        <span>12:00</span>
-        <span>13:30</span>
-      </footer>
+      </div>
     </article>
   )
 }
-
 export function WatchPage({ slots }: { slots: DeskSlots | null }) {
   const [items, setItems] = useState<Item[]>(loadItems)
   const [quotes, setQuotes] = useState<QuoteRow[]>([])
@@ -308,7 +443,7 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
 
   useEffect(() => {
     let stop = false
-    const symbols = chartItems.map((item) => item.symbol).join(',')
+    const symbols = chartItems.map((item) => `${item.symbol}:${item.market}`).join(',')
     const pull = async () => {
       if (!symbols) {
         if (!stop) setBooks({})
