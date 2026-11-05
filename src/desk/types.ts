@@ -114,4 +114,6 @@ export type SparkBook = {
   bias: number
   points: SparkPoint[]
   force: SparkForce[]
+  /** 買賣力道資料的日期（YYYY-MM-DD），開盤前可能是前一交易日 */
+  forceDate?: string
 }

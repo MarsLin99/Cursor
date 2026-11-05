@@ -798,3 +798,16 @@
   stroke: rgba(15, 61, 62, 0.55);
   stroke-width: 1;
 }
+
+.spark-card .force-axis {
+  font-size: 7px;
+  fill: rgba(15, 61, 62, 0.55);
+}
+
+.spark-card .force-label.stale {
+  fill: #b7791f;
+}
+
+.spark-card .force-bar:hover {
+  opacity: 0.7;
+}

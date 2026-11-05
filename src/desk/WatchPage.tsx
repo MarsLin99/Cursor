@@ -107,6 +107,9 @@ function Spark({
   const minuteNet = forceBars.map((point, i) => ({ t: point.t, d: point.d, net: point.d - (i > 0 ? forceBars[i - 1].d : 0) }))
   const netExtreme = Math.max(...minuteNet.map((point) => Math.abs(point.net)), 1)
   const yNet = (value: number) => forceTop + ((netExtreme - value) / (netExtreme * 2)) * forceH
+  const lastNet = minuteNet.at(-1)?.net ?? 0
+  const todayTpe = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })
+  const staleDate = book?.forceDate && book.forceDate !== todayTpe ? book.forceDate.slice(5).replace('-', '/') : null
   const cumLine = forceBars.map((point) => `${xOf(point.t)},${yForce(point.d)}`).join(' ')
   const bias = book?.bias ?? force.at(-1)?.d ?? 0
   const digits = price != null && price >= 1000 ? 0 : 2
@@ -152,8 +155,22 @@ function Spark({
             等待台新行情
           </text>
         )}
+        <text x="0" y={forceTop + 4} dominantBaseline="middle" className="force-label">
+          本分 {signed(lastNet, 0)}
+        </text>
         <text x="0" y={yForce(0)} dominantBaseline="middle" className="force-label">
-          買賣力道 {signed(bias, 0)}
+          累積 {signed(bias, 0)}
+        </text>
+        {staleDate ? (
+          <text x="0" y={forceTop + forceH - 3} dominantBaseline="middle" className="force-label stale">
+            {staleDate} 資料
+          </text>
+        ) : null}
+        <text x={width - 1} y={forceTop + 4} textAnchor="end" dominantBaseline="middle" className="force-axis">
+          {signed(extreme, 0)}
+        </text>
+        <text x={width - 1} y={forceTop + forceH - 3} textAnchor="end" dominantBaseline="middle" className="force-axis">
+          {signed(-extreme, 0)}
         </text>
         <line x1={plotLeft} x2={width} y1={yForce(0)} y2={yForce(0)} className="zero" />
         {minuteNet.map((point) => {
@@ -167,7 +184,9 @@ function Spark({
               width={barW}
               height={Math.max(0.5, Math.abs(y - y0))}
               className={point.net >= 0 ? 'force-bar up' : 'force-bar down'}
-            />
+            >
+              <title>{`${point.t.slice(0, 5)}  淨 ${signed(point.net, 0)} 張／累積 ${signed(point.d, 0)} 張`}</title>
+            </rect>
           )
         })}
         {forceBars.length > 1 ? <polyline points={cumLine} className="force-cum" /> : null}

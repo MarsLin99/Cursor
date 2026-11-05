@@ -840,7 +840,7 @@ function applyTechForce(book: SparkBook, tech: SparkForceFile | null, sessionDat
   if (!visible) return book
   const row = tech.symbols[book.symbol]
   if (!row?.force?.length) return book
-  return { ...book, bias: row.bias ?? book.bias, force: row.force }
+  return { ...book, bias: row.bias ?? book.bias, force: row.force, forceDate: tech.date }
 }
 
 function overlaySpark(rows: QuoteRow[], live: Record<string, SparkBook>) {
