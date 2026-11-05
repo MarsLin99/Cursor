@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
@@ -10,6 +10,7 @@ import type {
   TickerItem,
   WinPick,
 } from '../src/desk/types.ts'
+import { startTaishinFeed, taishinConnectedNow } from './taishin.ts'
 
 const dataDir = path.join(process.cwd(), 'data')
 const macroFile = path.join(dataDir, 'macro-cache.json')
@@ -733,6 +734,8 @@ export async function fetchQuotes(
 
 type SparkLiveFile = {
   date?: string
+  connected?: boolean
+  updatedAt?: string
   symbols?: Record<string, SparkBook>
 }
 
@@ -741,9 +744,56 @@ type SparkForceFile = {
   symbols?: Record<string, { bias?: number; force?: SparkBook['force'] }>
 }
 
+/** 台新／Fugle 加權指數可能寫成 t00 或 IX0001 */
+const INDEX_KEYS = ['t00', 'IX0001', 'IR0001'] as const
+
+async function readSparkLiveFile() {
+  return readJson<SparkLiveFile>(sparkLiveFile)
+}
+
 async function readSparkLive() {
-  const saved = await readJson<SparkLiveFile>(sparkLiveFile)
+  const saved = await readSparkLiveFile()
   return saved?.symbols ?? {}
+}
+
+function liveBook(live: Record<string, SparkBook>, symbol: string) {
+  if (live[symbol]) return live[symbol]
+  if (symbol === 't00') {
+    for (const key of INDEX_KEYS) {
+      if (live[key]) return live[key]
+    }
+  }
+  return undefined
+}
+
+async function taishinLiveStatus() {
+  const memoryLive = taishinConnectedNow()
+  if (memoryLive) {
+    return { connected: true, source: 'taishin' as const, updatedAt: new Date().toISOString() }
+  }
+  try {
+    const [saved, info] = await Promise.all([readSparkLiveFile(), stat(sparkLiveFile)])
+    const age = Date.now() - info.mtimeMs
+    const today = taipeiDate()
+    const dateOk =
+      !saved?.date ||
+      saved.date === today ||
+      saved.date === today.replace(/-/g, '')
+    const hasIndex = INDEX_KEYS.some((key) => {
+      const book = saved?.symbols?.[key]
+      return book != null && book.price != null
+    })
+    const fresh = age < 90_000
+    const flagged = saved?.connected === true
+    const connected = Boolean(dateOk && hasIndex && (flagged || fresh) && (fresh || !twSession()))
+    return {
+      connected,
+      source: connected ? ('taishin' as const) : ('none' as const),
+      updatedAt: saved?.updatedAt ?? info.mtime.toISOString(),
+    }
+  } catch {
+    return { connected: false, source: 'none' as const, updatedAt: null }
+  }
 }
 
 function sparkSymbols(raw: string) {
@@ -793,7 +843,7 @@ function applyTechForce(book: SparkBook, tech: SparkForceFile | null, sessionDat
 
 function overlaySpark(rows: QuoteRow[], live: Record<string, SparkBook>) {
   return rows.map((row) => {
-    const book = live[row.symbol]
+    const book = liveBook(live, row.symbol)
     if (!book || book.price == null) return row
     const prev = book.prev ?? row.prev
     const change = prev != null ? book.price - prev : row.change
@@ -813,6 +863,34 @@ function overlaySpark(rows: QuoteRow[], live: Record<string, SparkBook>) {
       time: book.time || row.time,
     }
   })
+}
+
+/** 台新有資料就用台新；缺的代號才打證交所 MIS。 */
+async function fetchQuotesPreferTaishin(
+  items: { symbol: string; market: 'twse' | 'tpex' }[],
+) {
+  const live = await readSparkLive()
+  const missing = items.filter((item) => liveBook(live, item.symbol)?.price == null)
+  const mis = missing.length ? await fetchQuotes(missing).catch(() => [] as QuoteRow[]) : []
+  const bySymbol = new Map(mis.map((row) => [row.symbol, row]))
+  const blank = (item: { symbol: string; market: 'twse' | 'tpex' }): QuoteRow => ({
+    symbol: item.symbol,
+    name: item.symbol,
+    market: item.market,
+    price: null,
+    change: null,
+    pct: null,
+    bid: null,
+    ask: null,
+    volume: null,
+    open: null,
+    high: null,
+    low: null,
+    prev: null,
+    time: '',
+  })
+  const base = items.map((item) => bySymbol.get(item.symbol) ?? blank(item))
+  return overlaySpark(base, live)
 }
 
 async function fetchIntradaySuffix(symbol: string, suffix: 'TW' | 'TWO') {
@@ -1103,6 +1181,7 @@ export function attachBoard(middlewares: {
       if (stale(memory)) void scanMacro()
       maybeRefreshTicker()
       maybeRefreshSectors()
+      await startTaishinFeed()
     })()
     timer = setInterval(() => {
       if (stale(memory)) void scanMacro()
@@ -1130,6 +1209,10 @@ export function attachBoard(middlewares: {
         send(res, 200, snapshot)
         return
       }
+      if (url.pathname === '/api/board/live' && req.method === 'GET') {
+        send(res, 200, await taishinLiveStatus())
+        return
+      }
       if (url.pathname === '/api/board/quotes' && req.method === 'GET') {
         const raw = url.searchParams.get('items') ?? ''
         const items = raw
@@ -1140,9 +1223,7 @@ export function attachBoard(middlewares: {
             return { symbol, market: market === 'tpex' ? 'tpex' as const : 'twse' as const }
           })
           .filter((item): item is { symbol: string; market: 'twse' | 'tpex' } => item != null)
-        const quotes = await fetchQuotes(items)
-        const live = await readSparkLive()
-        send(res, 200, overlaySpark(quotes, live))
+        send(res, 200, await fetchQuotesPreferTaishin(items))
         return
       }
       if (url.pathname === '/api/board/spark' && req.method === 'GET') {

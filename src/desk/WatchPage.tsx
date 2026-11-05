@@ -168,6 +168,7 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
   const [notice, setNotice] = useState('')
   const [dockHold, setDockHold] = useState(false)
   const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [liveOn, setLiveOn] = useState(false)
   const dockRef = useRef<HTMLElement>(null)
 
   const releaseDock = () => {
@@ -201,6 +202,26 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
 
   useEffect(() => {
     let stop = false
+    const pullLive = async () => {
+      try {
+        const res = await fetch('/api/board/live')
+        if (!res.ok || stop) return
+        const body = (await res.json()) as { connected?: boolean }
+        setLiveOn(Boolean(body.connected))
+      } catch {
+        if (!stop) setLiveOn(false)
+      }
+    }
+    void pullLive()
+    const timer = window.setInterval(() => void pullLive(), 2000)
+    return () => {
+      stop = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    let stop = false
     const pull = async () => {
       const list = [
         't00:twse',
@@ -215,12 +236,13 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
       }
     }
     void pull()
-    const timer = window.setInterval(() => void pull(), 20000)
+    /** 台新連上時加快輪詢，加權時間才會跟著跳 */
+    const timer = window.setInterval(() => void pull(), liveOn ? 2000 : 20000)
     return () => {
       stop = true
       window.clearInterval(timer)
     }
-  }, [items])
+  }, [items, liveOn])
 
   const chartItems = items.filter((item) => item.chart)
   const chartKey = chartItems.map((item) => `${item.market}:${item.symbol}`).join(',')
@@ -363,6 +385,12 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
         ? createPortal(
             <div className="title-stack watch-title">
               <p className="title-main">
+                <span
+                  className={liveOn ? 'live-dot on' : 'live-dot off'}
+                  title={liveOn ? '台新即時行情已連線' : '台新即時行情未連線'}
+                  aria-label={liveOn ? '台新即時行情已連線' : '台新即時行情未連線'}
+                  role="status"
+                />
                 <span className="kicker">台股看盤</span>
                 <span className={`index-inline ${tone(indexChange)}`}>
                   加權 {fmt(indexPrice, 2)}
