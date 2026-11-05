@@ -65,13 +65,27 @@ function Spark({
   quote?: QuoteRow
   book?: SparkBook
 }) {
-  const width = 280
-  const height = 229
-  const plotLeft = 68
-  const priceTop = 15
-  const priceH = 130
-  const forceTop = 163
-  const forceH = 48
+  // 依卡片實際寬度畫圖，避免 SVG 等比縮放後兩側留白
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [width, setWidth] = useState(320)
+  useEffect(() => {
+    const el = svgRef.current
+    if (!el) return
+    const measure = () => {
+      const w = Math.round(el.getBoundingClientRect().width)
+      if (w > 0) setWidth(w)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const height = 320
+  const plotLeft = 60
+  const priceTop = 10
+  const priceH = 200
+  const forceTop = 228
+  const forceH = 84
   const band = priceBand(book)
   const limitUp = band?.up ?? null
   const limitDown = band?.down ?? null
@@ -126,7 +140,7 @@ function Spark({
           </small>
         </span>
       </header>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${item.name} 當日走勢`}>
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${item.name} 當日走勢`}>
         {ready ? (
           <>
             <line x1={plotLeft} x2={width} y1={yOf(limitUp)} y2={yOf(limitUp)} className="limit-up" />
