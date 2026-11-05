@@ -101,7 +101,14 @@ export type SparkPoint = { t: string; p: number }
 export type SparkForce = { t: string; d: number }
 /** 每分鐘外盤／內盤張數。taishin＝台新逐筆，est＝依一分K收盤位置估計 */
 /** src：taishin＝台新外內盤、mis＝即時抽樣（同參考程式）、est＝一分K估 */
-export type SparkFlow = { t: string; out: number; inn: number; src: 'taishin' | 'mis' | 'est' }
+export type SparkFlow = {
+  t: string
+  out: number
+  inn: number
+  /** 這一分鐘（外盤−內盤）張數差＝買賣力條狀圖那一條 */
+  net?: number
+  src: 'taishin' | 'mis' | 'est'
+}
 
 /** 台新行情累積的當日走勢。漲跌停與開盤在盤中固定。 */
 export type SparkBook = {

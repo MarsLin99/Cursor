@@ -1339,7 +1339,9 @@ function buildSpark(
   let estMinutes = 0
   const pushFlow = (m: number, pair: [number, number], src: SparkFlow['src']) => {
     cum += pair[0] - pair[1]
-    flow.push({ t: hms(m), out: Math.round(pair[0] * 10) / 10, inn: Math.round(pair[1] * 10) / 10, src })
+    const out = Math.round(pair[0] * 10) / 10
+    const inn = Math.round(pair[1] * 10) / 10
+    flow.push({ t: hms(m), out, inn, net: Math.round((out - inn) * 10) / 10, src })
     force.push({ t: hms(m), d: Math.round(cum) })
   }
   if (extBars.length) {

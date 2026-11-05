@@ -71,16 +71,16 @@ function clockOf(minute: number) {
   return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
 }
 
-type FlowRow = { minute: number; net: number; cum: number; est: boolean }
+type FlowRow = { minute: number; out: number | null; inn: number | null; net: number; cum: number; est: boolean }
 
 /** 每分鐘淨張數（外盤−內盤）與累積買賣力 */
 function flowRows(book?: SparkBook): FlowRow[] {
   if (book?.flow?.length) {
     let running = 0
     return book.flow.map((row) => {
-      const net = row.out - row.inn
+      const net = row.net ?? row.out - row.inn
       running += net
-      return { minute: Math.floor(minuteOf(row.t)), net, cum: running, est: row.src === 'est' }
+      return { minute: Math.floor(minuteOf(row.t)), out: row.out, inn: row.inn, net, cum: running, est: row.src === 'est' }
     })
   }
   // 舊格式只有累積序列：每分鐘取最後一筆
@@ -92,7 +92,7 @@ function flowRows(book?: SparkBook): FlowRow[] {
     .map(([minute, d]) => {
       const net = d - prevD
       prevD = d
-      return { minute, net, cum: d, est: false }
+      return { minute, out: null, inn: null, net, cum: d, est: false }
     })
 }
 
@@ -154,7 +154,7 @@ function Spark({
 
   const points = book?.points ?? []
   const band = priceBand(book)
-  // Y 軸以開盤參考價（昨收，漲跌停就是由它 ±10% 算出）為正中央，上下對稱到漲停／跌停，整天固定；
+  // Y 軸以平盤（昨收，漲跌停就是由它 ±10% 算出）為正中央，上下對稱到漲停／跌停，整天固定；
   // 價格超出（無漲跌幅限制的標的）就壓在邊上，不再隨走勢縮放
   const firstPrice = points[0]?.p ?? null
   const center =
@@ -184,9 +184,9 @@ function Spark({
   const areaOf = (segment: SparkPoint[]) =>
     `${pathOf(segment)}L${xOf(segment[segment.length - 1].t).toFixed(1)},${priceBottom}L${xOf(segment[0].t).toFixed(1)},${priceBottom}Z`
 
-  // 買賣力＝累積（外盤−內盤）張數，零軸上紅下綠
+  // 買賣力：每一條＝那一分鐘的（外盤−內盤）張數差，正的往上紅、負的往下綠，依當天單分鐘最大絕對值縮放
   const rows = flowRows(book)
-  const maxAbs = Math.max(1, ...rows.map((row) => Math.abs(row.cum)))
+  const maxAbs = Math.max(1, ...rows.map((row) => Math.abs(row.net)))
   const slot = plotW / (SESSION_END - SESSION_START)
   const barW = Math.max(slot * 0.85, 0.8)
   const gradId = `spark-fill-${item.symbol}`
@@ -196,12 +196,21 @@ function Spark({
   const markers = (
     [
       { price: band?.up ?? null, label: '漲停', cls: 'up' },
-      { price: center, label: '開盤', cls: 'open' },
+      { price: center, label: '平盤', cls: 'open' },
       { price: band?.down ?? null, label: '跌停', cls: 'down' },
     ] as { price: number | null; label: string; cls: string }[]
   ).filter((mark): mark is { price: number; label: string; cls: string } => ready && mark.price != null && Number.isFinite(mark.price))
 
-  let hover: { x: number; y: number; t: string; p: number; net: number | null; cum: number | null } | null = null
+  let hover: {
+    x: number
+    y: number
+    t: string
+    p: number
+    out: number | null
+    inn: number | null
+    net: number | null
+    cum: number | null
+  } | null = null
   if (hoverX != null && ready && points.length && hoverX >= PAD.l && hoverX <= width - PAD.r) {
     let best = points[0]
     let bestD = Infinity
@@ -219,7 +228,16 @@ function Spark({
       if (row.minute <= minute) upTo = row
       if (row.minute === minute) same = row
     }
-    hover = { x: xOf(best.t), y: yOf(best.p), t: best.t.slice(0, 5), p: best.p, net: same?.net ?? null, cum: upTo?.cum ?? null }
+    hover = {
+      x: xOf(best.t),
+      y: yOf(best.p),
+      t: best.t.slice(0, 5),
+      p: best.p,
+      out: same?.out ?? null,
+      inn: same?.inn ?? null,
+      net: same?.net ?? null,
+      cum: upTo?.cum ?? null,
+    }
   }
   const flip = hover != null && hover.x > width * 0.58
 
@@ -288,16 +306,16 @@ function Spark({
 
           <line x1={PAD.l} x2={width - PAD.r} y1={mid} y2={mid} className="zero" />
           {rows.map((row) => {
-            const h = (Math.abs(row.cum) / maxAbs) * (volH / 2)
+            const h = (Math.abs(row.net) / maxAbs) * (volH / 2)
             const x = xOfMinute(row.minute) - slot / 2
             return (
               <rect
                 key={row.minute}
                 x={x}
-                y={row.cum >= 0 ? mid - h : mid}
+                y={row.net >= 0 ? mid - h : mid}
                 width={barW}
                 height={Math.max(h, 0.5)}
-                className={row.cum >= 0 ? 'force-bar up' : 'force-bar down'}
+                className={row.net >= 0 ? 'force-bar up' : 'force-bar down'}
               />
             )
           })}
@@ -337,7 +355,7 @@ function Spark({
               top: Math.min(Math.max(hover.y - 28, priceTop), priceBottom - 24),
             }}
           >
-            {`${hover.t}  ${formatPrice(hover.p)}  本分 ${hover.net == null ? '—' : signedLots(hover.net)}  買賣力 ${hover.cum == null ? '—' : signedLots(hover.cum)}`}
+            {`${hover.t}  ${formatPrice(hover.p)}  外 ${hover.out == null ? '—' : Math.round(hover.out).toLocaleString('zh-TW')}  內 ${hover.inn == null ? '—' : Math.round(hover.inn).toLocaleString('zh-TW')}  差 ${hover.net == null ? '—' : signedLots(hover.net)}  累計 ${hover.cum == null ? '—' : signedLots(hover.cum)}`}
           </div>
         ) : null}
       </div>
