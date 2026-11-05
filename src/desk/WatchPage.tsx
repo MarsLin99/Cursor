@@ -154,23 +154,23 @@ function Spark({
 
   const points = book?.points ?? []
   const band = priceBand(book)
-  // Y 軸固定在漲停／跌停，整天不變；超出範圍（無漲跌幅限制的標的）才放寬
-  let top = band?.up ?? null
-  let bottom = band?.down ?? null
-  if (points.length) {
-    const hi = Math.max(...points.map((point) => point.p))
-    const lo = Math.min(...points.map((point) => point.p))
-    top = top == null ? hi : Math.max(top, hi)
-    bottom = bottom == null ? lo : Math.min(bottom, lo)
-  }
-  if (top != null && bottom != null && top === bottom) {
-    top += 1
-    bottom -= 1
-  }
+  // Y 軸以開盤參考價（昨收，漲跌停就是由它 ±10% 算出）為正中央，上下對稱到漲停／跌停，整天固定；
+  // 價格超出（無漲跌幅限制的標的）就壓在邊上，不再隨走勢縮放
+  const firstPrice = points[0]?.p ?? null
+  const center =
+    book?.prev ?? quote?.prev ?? (band ? (band.up + band.down) / 2 : null) ?? book?.open ?? quote?.open ?? firstPrice
+  const half =
+    center != null && center > 0
+      ? band
+        ? Math.max(band.up - center, center - band.down, center * 0.001)
+        : center * 0.1
+      : null
+  const top = center != null && half != null ? center + half : null
+  const bottom = center != null && half != null ? center - half : null
   const ready = top != null && bottom != null && top > bottom
-  const yOf = (value: number) => priceTop + ((top! - value) / (top! - bottom!)) * (priceBottom - priceTop)
+  const yOf = (value: number) =>
+    priceTop + ((top! - Math.min(top!, Math.max(bottom!, value))) / (top! - bottom!)) * (priceBottom - priceTop)
 
-  const open = book?.open ?? quote?.open ?? null
   const price = book?.price ?? quote?.price ?? null
   const prev = book?.prev ?? quote?.prev ?? null
   const change = price != null && prev != null ? price - prev : (quote?.change ?? null)
@@ -196,7 +196,7 @@ function Spark({
   const markers = (
     [
       { price: band?.up ?? null, label: '漲停', cls: 'up' },
-      { price: open, label: '開盤', cls: 'open' },
+      { price: center, label: '開盤', cls: 'open' },
       { price: band?.down ?? null, label: '跌停', cls: 'down' },
     ] as { price: number | null; label: string; cls: string }[]
   ).filter((mark): mark is { price: number; label: string; cls: string } => ready && mark.price != null && Number.isFinite(mark.price))
