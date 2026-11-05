@@ -27,6 +27,10 @@ export type IndexPoint = { time: string; value: number }
 
 export type MacroSnapshot = {
   scannedAt: string | null
+  /** 類股流向最後刷新時間（ISO）、MIS 類股指數時間（HH:MM:SS）、MoneyDJ 流向表更新時間 */
+  sectorsAt?: string | null
+  sectorsTime?: string
+  flowUpdated?: string
   scanning: boolean
   index: {
     price: number | null

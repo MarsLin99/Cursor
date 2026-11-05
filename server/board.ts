@@ -220,6 +220,8 @@ function flowRate(name: string, rates: Map<string, number>) {
   return null
 }
 
+let flowUpdated = ''
+
 async function fetchFlowRates() {
   const res = await fetch('https://www.moneydj.com/Z/ZB/ZBA/ZBA.djhtm', {
     signal: AbortSignal.timeout(15000),
@@ -233,7 +235,9 @@ async function fetchFlowRates() {
     .split('\n')
     .map((line) => line.replace(/\s+/g, '').trim())
     .filter(Boolean)
-  const start = lines.indexOf('上市資金流向表')
+  const start = lines.findIndex((line) => line.startsWith('上市資金流向表'))
+  const stamp = lines.slice(Math.max(0, start), start + 4).join('').match(/最後更新時間[:：]?(\d{1,2})\/(\d{1,2})(?:(\d{1,2}:\d{2}))?/)
+  if (stamp) flowUpdated = `${Number(stamp[1])}/${Number(stamp[2])}${stamp[3] ? ` ${stamp[3]}` : ''}`
   const end = lines.findIndex((line, index) => index > start && line.startsWith('上櫃'))
   const body = start >= 0 ? lines.slice(start + 1, end > start ? end : start + 80) : []
   const rates = new Map<string, number>()
@@ -249,6 +253,46 @@ async function fetchFlowRates() {
 let sectorRefreshing = false
 let flowAt = 0
 
+/** 證交所上市類股指數代碼（MIS 盤中每 5 秒更新；台新報價沒有類股指數） */
+const SECTOR_CODES = [
+  't01', 't02', 't03', 't04', 't05', 't06', 't07', 't08', 't09', 't10',
+  't11', 't12', 't13', 't14', 't15', 't16', 't17', 't18', 't20', 't21',
+  't22', 't23', 't24', 't25', 't26', 't27', 't28', 't29', 't30', 't31',
+]
+
+async function fetchMisSectors() {
+  const url =
+    'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=' +
+    SECTOR_CODES.map((code) => `tse_${code}.tw`).join('|') +
+    `&json=1&delay=0&_=${Date.now()}`
+  const res = await fetch(url, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(10000),
+    headers: { 'User-Agent': UA, Referer: 'https://mis.twse.com.tw/stock/index.jsp' },
+  })
+  if (!res.ok) throw new Error(`${res.status} mis sectors`)
+  const json = (await res.json()) as { msgArray?: Record<string, string>[] }
+  let date = ''
+  let time = ''
+  const sectors = (json.msgArray ?? []).flatMap((row) => {
+    const name = String(row.n ?? '').replace(/類指數$/, '').trim()
+    const price = row.z && row.z !== '-' ? num(row.z) : null
+    const prev = row.y ? num(row.y) : null
+    if (!name || price == null || !prev) return []
+    if ((row.d ?? '') > date) date = row.d ?? ''
+    if ((row.t ?? '') > time) time = row.t ?? ''
+    return [
+      {
+        name,
+        pct: Math.round(((price - prev) / prev) * 10000) / 100,
+        points: Math.round((price - prev) * 100) / 100,
+        flow: null as number | null,
+      },
+    ]
+  })
+  return { date, time, sectors }
+}
+
 function twSession(now = new Date()) {
   const { weekday, mins } = taipeiClock(now)
   return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(weekday) && mins >= 9 * 60 && mins <= 13 * 60 + 30
@@ -258,12 +302,25 @@ async function refreshSectors() {
   if (sectorRefreshing) return
   sectorRefreshing = true
   try {
-    const pack = await fetchIndexAndSectors()
+    // 盤中用 MIS 即時類股指數；MIS 失敗才退回盤後 MI_INDEX（前一交易日）
+    const live = await fetchMisSectors().catch(() => null)
+    let pack: { date: string; time: string; sectors: CacheShape['sectors'] }
+    if (live?.sectors.length) {
+      const rates = await fetchFlowRates().catch(() => new Map<string, number>())
+      for (const sector of live.sectors) sector.flow = flowRate(sector.name, rates)
+      pack = live
+    } else {
+      const after = await fetchIndexAndSectors()
+      pack = { date: after.date, time: '', sectors: after.sectors }
+    }
     if (!pack.sectors.length) return
     const base = memory ?? (await readJson<CacheShape>(macroFile)) ?? emptySnapshot()
     memory = {
       ...base,
       sectors: pack.sectors,
+      sectorsAt: new Date().toISOString(),
+      sectorsTime: pack.time,
+      flowUpdated,
       index: { ...base.index, date: pack.date || base.index.date },
     }
     await writeJson(macroFile, memory)
@@ -278,7 +335,8 @@ async function refreshSectors() {
 function maybeRefreshSectors() {
   const missing = !memory?.sectors.some((row) => row.flow != null)
   if (!missing && !twSession()) return
-  if (!missing && Date.now() - flowAt < 3 * 60_000) return
+  // 盤中 30 秒一輪（OneWebStock 快取 45 秒；MIS 類股指數本身約每 1 分多鐘才換一次）
+  if (!missing && Date.now() - flowAt < 30_000) return
   void refreshSectors()
 }
 
@@ -1526,6 +1584,7 @@ export function attachBoard(middlewares: {
     }
     try {
       if (url.pathname === '/api/board/snapshot' && req.method === 'GET') {
+        maybeRefreshSectors()
         const snapshot = memory ?? (await readJson<CacheShape>(macroFile)) ?? emptySnapshot()
         const report = reportMemory ?? (await readJson<DeskReport>(reportFile))
         send(res, 200, { ...snapshot, scanning, report, schedule: SLOTS })

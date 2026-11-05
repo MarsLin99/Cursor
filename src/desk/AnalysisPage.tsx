@@ -109,7 +109,8 @@ function ListCard({ card }: { card: InsightCard }) {
   )
 }
 
-const PAD = { top: 28, right: 62, bottom: 40, left: 54 }
+// 分析頁放大 20%：邊距、線寬、點半徑一起乘 1.2（字級在 CSS 已放大）
+const PAD = { top: 34, right: 74, bottom: 48, left: 65 }
 
 function OverlayChart({ points }: { points: OverlayPoint[] }) {
   const frame = useRef<HTMLDivElement>(null)
@@ -188,11 +189,11 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
           return (
             <g key={g}>
               <line x1={PAD.left} x2={w - PAD.right} y1={y} y2={y} className="ov-grid" />
-              <text x={PAD.left - 6} y={y + 4} textAnchor="end" className="ov-axis">
+              <text x={PAD.left - 7} y={y + 5} textAnchor="end" className="ov-axis">
                 {(kHi - (g / 4) * (kHi - kLo)).toFixed(1)}
               </text>
               {taiex.length ? (
-                <text x={w - PAD.right + 6} y={y + 4} className="ov-axis">
+                <text x={w - PAD.right + 7} y={y + 5} className="ov-axis">
                   {group(tHi - (g / 4) * (tHi - tLo))}
                 </text>
               ) : null}
@@ -200,25 +201,25 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
           )
         })}
         {ticks.map((i) => (
-          <text key={i} x={x(i)} y={h - PAD.bottom + 18} textAnchor={i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'} className="ov-axis">
+          <text key={i} x={x(i)} y={h - PAD.bottom + 22} textAnchor={i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'} className="ov-axis">
             {points[i].date.slice(5)}
           </text>
         ))}
-        {taiexPath ? <path d={taiexPath} fill="none" stroke={TAIEX_COLOR} strokeWidth={2.4} strokeDasharray="7 5" /> : null}
-        <path d={keepPath} fill="none" stroke={KEEP_COLOR} strokeWidth={2.6} strokeLinejoin="round" />
-        <text x={x(points.length - 1) - 4} y={yK(last.keepRate) - 8} textAnchor="end" className="ov-last" fill={KEEP_COLOR}>
+        {taiexPath ? <path d={taiexPath} fill="none" stroke={TAIEX_COLOR} strokeWidth={2.9} strokeDasharray="8.4 6" /> : null}
+        <path d={keepPath} fill="none" stroke={KEEP_COLOR} strokeWidth={3.1} strokeLinejoin="round" />
+        <text x={x(points.length - 1) - 5} y={yK(last.keepRate) - 10} textAnchor="end" className="ov-last" fill={KEEP_COLOR}>
           {last.keepRate.toFixed(2)}%
         </text>
         {taiex.length && lastTaiexIndex >= 0 ? (
-          <text x={x(lastTaiexIndex) - 4} y={yT(taiex[taiex.length - 1]) + 16} textAnchor="end" className="ov-last" fill={TAIEX_COLOR}>
+          <text x={x(lastTaiexIndex) - 5} y={yT(taiex[taiex.length - 1]) + 19} textAnchor="end" className="ov-last" fill={TAIEX_COLOR}>
             {group(taiex[taiex.length - 1])}
           </text>
         ) : null}
         {tip && hover != null ? (
           <g>
             <line x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={h - PAD.bottom} className="ov-hover" />
-            <circle cx={x(hover)} cy={yK(tip.keepRate)} r={3.5} fill={KEEP_COLOR} />
-            {tip.taiex != null ? <circle cx={x(hover)} cy={yT(tip.taiex)} r={3.5} fill={TAIEX_COLOR} /> : null}
+            <circle cx={x(hover)} cy={yK(tip.keepRate)} r={4.2} fill={KEEP_COLOR} />
+            {tip.taiex != null ? <circle cx={x(hover)} cy={yT(tip.taiex)} r={4.2} fill={TAIEX_COLOR} /> : null}
           </g>
         ) : null}
       </svg>

@@ -516,19 +516,22 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
   const indexPrice = index?.price ?? macro?.index.price ?? null
   const indexChange = index?.change ?? macro?.index.change ?? null
   const indexPct = index?.pct ?? macro?.index.pct ?? null
-  const withFlow = (macro?.sectors ?? []).filter((row) => row.flow != null)
+  // 同 OneWebStock：排除母類別，依「成交占比 × 類股漲跌幅」排流入／流出前五
+  const FLOW_PARENTS = ['電子', '電子工業', '化學生技醫療']
+  const withFlow = (macro?.sectors ?? []).filter((row) => row.flow != null && !FLOW_PARENTS.includes(row.name))
+  const score = (row: { flow: number | null; pct: number }) => (row.flow ?? 0) * row.pct
   const inflow = withFlow
     .filter((row) => row.pct > 0)
-    .sort((a, b) => (b.flow ?? 0) - (a.flow ?? 0))
+    .sort((a, b) => score(b) - score(a))
     .slice(0, 5)
   const outflow = withFlow
     .filter((row) => row.pct < 0)
-    .sort((a, b) => (b.flow ?? 0) - (a.flow ?? 0))
+    .sort((a, b) => score(a) - score(b))
     .slice(0, 5)
   const flowDay =
-    macro?.index.date && macro.index.date.length === 8
+    (macro?.index.date && macro.index.date.length === 8
       ? `${Number(macro.index.date.slice(4, 6))}月${Number(macro.index.date.slice(6))}日`
-      : ''
+      : '') + (macro?.sectorsTime ? ` ${macro.sectorsTime.slice(0, 5)} 更新` : '')
 
   const addHit = (hit: StockHit) => {
     let added = false
