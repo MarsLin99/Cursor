@@ -130,3 +130,76 @@ export type SparkBook = {
     yahooBars: number
   }
 }
+
+/** 分析頁（OneWebStock 版型）：燈號色、漲跌色 */
+export type InsightTone = 'up' | 'down' | 'flat' | 'alert' | 'red' | 'yellow-red' | 'green' | 'yellow-blue' | 'blue'
+
+export type InsightMetric = {
+  id: string
+  title: string
+  value: string
+  period: string
+  detail: string
+  detailTone: InsightTone
+  status: string
+  tone: InsightTone
+  note: string
+  source: string
+  /** 景氣燈號用圓點，其餘用膠囊 */
+  lamp?: boolean
+}
+
+export type InsightParty = { name: string; text: string; tone: InsightTone }
+export type InsightBar = { label: string; value: number; level: number; tone: InsightTone }
+
+export type InsightCard = InsightMetric & {
+  kind: 'market' | 'list'
+  items?: InsightMetric[]
+  institutions?: { dateLabel: string; items: InsightParty[] }
+  derivatives?: { dateLabel: string; title: string; unit: string; bars: InsightBar[] }
+}
+
+export type MarginSnapshot = {
+  date: string
+  keepRate: number | null
+  callAccNum: number | null
+  exeAccNum: number | null
+  belowAccNum: number | null
+  marginAccRate: number | null
+}
+
+export type OverlayPoint = { date: string; keepRate: number; taiex: number | null }
+
+export type InsightBundle = {
+  updatedAt: string
+  cards: InsightCard[]
+  margin: { latest: MarginSnapshot | null; label: string; source: string; error?: string }
+  overlay: OverlayPoint[]
+  errors: string[]
+}
+
+export type InsightIdea = {
+  code: string
+  name: string
+  action: string
+  reason: string
+  changePercent: number | null
+  price: number | null
+  /** 台新逐筆累積買賣力（外盤−內盤張數），沒有台新資料時為 null */
+  force: number | null
+  source: 'taishin' | 'twse'
+}
+
+export type InsightHolding = { bucket: string; idea: string; note: string }
+
+export type InsightReport = {
+  generatedAt: string
+  engine: 'grok' | 'rules'
+  model?: string
+  stance: string
+  marketSummary: string
+  stockIdeas: InsightIdea[]
+  holdings: InsightHolding[]
+  markdown: string
+  note?: string
+}

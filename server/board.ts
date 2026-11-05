@@ -12,6 +12,7 @@ import type {
   TickerItem,
   WinPick,
 } from '../src/desk/types.ts'
+import { getInsightBundle, makeInsightReport, readInsightReport } from './insight.ts'
 import { startTaishinFeed, taishinConnectedNow } from './taishin.ts'
 
 const dataDir = path.join(process.cwd(), 'data')
@@ -1598,6 +1599,32 @@ export function attachBoard(middlewares: {
           return
         }
         send(res, 200, await fetchIntraday(symbol, market))
+        return
+      }
+      if (url.pathname === '/api/board/insight' && req.method === 'GET') {
+        const { bundle, fromCache } = await getInsightBundle(url.searchParams.get('force') === '1')
+        send(res, 200, {
+          ...bundle,
+          fromCache,
+          report: await readInsightReport(),
+          llm: { configured: Boolean(await loadKey()) },
+        })
+        return
+      }
+      if (url.pathname === '/api/board/insight/report' && req.method === 'POST') {
+        const body = await readBody(req)
+        const items = sparkItems(String(body.items ?? ''))
+        const quotes = items.length ? await fetchQuotesPreferTaishin(items) : []
+        const saved = await readSparkLiveFile()
+        const today = saved?.date === taipeiDate()
+        const live = saved?.symbols ?? {}
+        const rows = quotes.map((quote) => {
+          const book = liveBook(live, quote.symbol)
+          const taishin = today && book?.price != null
+          return { quote, taishin, force: taishin && book ? book.bias : null }
+        })
+        const key = body.preferLlm === false ? '' : await loadKey()
+        send(res, 200, await makeInsightReport(rows, key))
         return
       }
       if (url.pathname === '/api/board/report' && req.method === 'POST') {
