@@ -103,6 +103,11 @@ function Spark({
       .values(),
   ]
   const barW = Math.max(0.6, ((width - plotLeft) / (SESSION_END - SESSION_START)) * 0.8)
+  // 條狀圖：每分鐘外盤減內盤的淨張數；折線：累積張數差
+  const minuteNet = forceBars.map((point, i) => ({ t: point.t, d: point.d, net: point.d - (i > 0 ? forceBars[i - 1].d : 0) }))
+  const netExtreme = Math.max(...minuteNet.map((point) => Math.abs(point.net)), 1)
+  const yNet = (value: number) => forceTop + ((netExtreme - value) / (netExtreme * 2)) * forceH
+  const cumLine = forceBars.map((point) => `${xOf(point.t)},${yForce(point.d)}`).join(' ')
   const bias = book?.bias ?? force.at(-1)?.d ?? 0
   const digits = price != null && price >= 1000 ? 0 : 2
   return (
@@ -151,9 +156,9 @@ function Spark({
           買賣力道 {signed(bias, 0)}
         </text>
         <line x1={plotLeft} x2={width} y1={yForce(0)} y2={yForce(0)} className="zero" />
-        {forceBars.map((point) => {
-          const y0 = yForce(0)
-          const y = yForce(point.d)
+        {minuteNet.map((point) => {
+          const y0 = yNet(0)
+          const y = yNet(point.net)
           return (
             <rect
               key={point.t}
@@ -161,10 +166,11 @@ function Spark({
               y={Math.min(y, y0)}
               width={barW}
               height={Math.max(0.5, Math.abs(y - y0))}
-              className={point.d >= 0 ? 'force-bar up' : 'force-bar down'}
+              className={point.net >= 0 ? 'force-bar up' : 'force-bar down'}
             />
           )
         })}
+        {forceBars.length > 1 ? <polyline points={cumLine} className="force-cum" /> : null}
       </svg>
       <footer style={{ paddingLeft: `${(plotLeft / width) * 100}%` }}>
         <span>09:00</span>

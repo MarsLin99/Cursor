@@ -792,3 +792,9 @@
 .spark-card .force-bar.down {
   fill: var(--down);
 }
+
+.spark-card .force-cum {
+  fill: none;
+  stroke: rgba(15, 61, 62, 0.55);
+  stroke-width: 1;
+}
