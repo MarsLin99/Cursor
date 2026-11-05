@@ -9,6 +9,7 @@ import type {
   SparkBook,
   SparkFlow,
   SparkForce,
+  SparkPoint,
   TickerItem,
   WinPick,
 } from '../src/desk/types.ts'
@@ -1273,7 +1274,29 @@ function buildSpark(
   // 股價：台新逐筆點為主；台新沒有點的分鐘，用一分K收盤補
   const covered = new Set(livePoints.map((point) => stampMinute(point.t)))
   const fills = extBars.filter((bar) => !covered.has(bar.m)).map((bar) => ({ t: hms(bar.m), p: bar.c }))
-  const points = [...livePoints, ...fills].sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+  const merged = [...livePoints, ...fills].sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
+  // 沒有成交的分鐘（冷門股、ETF 常見：台新沒逐筆、一分K也不出那根）沿用上一筆價，線才不會斷
+  const points: SparkPoint[] = []
+  const carried = new Set<number>()
+  // 開盤後幾分鐘才第一筆成交：09:00 起先用第一筆（即開盤價）撐住，線從 09:00 開始
+  const first = merged[0]
+  if (first) {
+    for (let m = SPARK_OPEN; m < stampMinute(first.t) && inSparkSession(m); m++) {
+      points.push({ t: hms(m), p: first.p })
+      carried.add(m)
+    }
+  }
+  for (const point of merged) {
+    const prev = points.at(-1)
+    if (prev) {
+      for (let m = stampMinute(prev.t) + 1; m < stampMinute(point.t); m++) {
+        if (!inSparkSession(m)) continue
+        points.push({ t: hms(m), p: prev.p })
+        carried.add(m)
+      }
+    }
+    points.push(point)
+  }
 
   // 買賣力：每分鐘外盤、內盤。台新優先（逐分桶 → 技術指標歷史 → 累積差），否則用一分K估
   const extMap = new Map(extBars.map((bar) => [bar.m, bar]))
@@ -1287,6 +1310,7 @@ function buildSpark(
   for (const m of liveNets.keys()) minutes.add(m)
   for (const m of techNets.keys()) minutes.add(m)
   for (const m of covered) minutes.add(m)
+  for (const m of carried) minutes.add(m)
 
   const flow: SparkFlow[] = []
   const force: SparkForce[] = []
@@ -1313,6 +1337,11 @@ function buildSpark(
     }
     if (!pair && bar) {
       pair = splitByClose(bar)
+      src = 'est'
+    }
+    // 沒成交的分鐘：買賣力 0，累積值延續
+    if (!pair && carried.has(m)) {
+      pair = [0, 0]
       src = 'est'
     }
     if (!pair) continue
@@ -1348,6 +1377,7 @@ function buildSpark(
     sources: {
       taishinPoints: livePoints.length,
       filledPoints: fills.length,
+      carriedPoints: carried.size,
       taishinMinutes,
       estMinutes,
       cnyesBars: ext?.cnyes ?? 0,

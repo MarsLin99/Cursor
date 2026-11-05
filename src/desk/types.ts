@@ -128,6 +128,8 @@ export type SparkBook = {
   sources?: {
     taishinPoints: number
     filledPoints: number
+    /** 沒有成交的分鐘沿用上一筆價補的點數 */
+    carriedPoints?: number
     taishinMinutes: number
     estMinutes: number
     cnyesBars: number
