@@ -179,6 +179,8 @@ export type InsightCard = InsightMetric & {
   items?: InsightMetric[]
   institutions?: { dateLabel: string; items: InsightParty[] }
   derivatives?: { dateLabel: string; title: string; unit: string; bars: InsightBar[] }
+  /** 大盤資料的 ISO 日期（YYYY-MM-DD），給快取換日判斷用 */
+  asOf?: string
 }
 
 export type MarginSnapshot = {

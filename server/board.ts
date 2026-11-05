@@ -13,7 +13,7 @@ import type {
   TickerItem,
   WinPick,
 } from '../src/desk/types.ts'
-import { getInsightBundle, makeInsightReport, readInsightReport } from './insight.ts'
+import { getInsightBundle, makeInsightReport, maybeRefreshInsightReport, readInsightReport, startInsightRefresh } from './insight.ts'
 import { startTaishinFeed, taishinConnectedNow } from './taishin.ts'
 import { flowSamples, noteFlowSymbols, sampledPrice, startFlowSampler, yahooFlow } from './flowSampler.ts'
 
@@ -1694,6 +1694,7 @@ export function attachBoard(middlewares: {
       maybeRefreshTicker()
       maybeRefreshSectors()
       void startFlowSampler(dataDir)
+      void startInsightRefresh()
       await startTaishinFeed()
     })()
     timer = setInterval(() => {
@@ -1790,10 +1791,11 @@ export function attachBoard(middlewares: {
       }
       if (url.pathname === '/api/board/insight' && req.method === 'GET') {
         const { bundle, fromCache } = await getInsightBundle(url.searchParams.get('force') === '1')
+        const report = (await maybeRefreshInsightReport([]).catch(() => null)) ?? (await readInsightReport())
         send(res, 200, {
           ...bundle,
           fromCache,
-          report: await readInsightReport(),
+          report,
           llm: { configured: Boolean(await loadKey()) },
         })
         return

@@ -25,6 +25,8 @@ const reportFile = path.join(dataDir, 'insight-report.json')
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
 const BUNDLE_TTL_MS = 20 * 60 * 1000
+/** 證交所收盤後約 15:00～17:00 陸續公布當日 FMTQIK／三大法人／期貨；融資維持率多半要到晚上約 21:30 */
+const CLOSE_PUBLISH_HM = '15:05'
 
 export type InsightQuote = { quote: QuoteRow; force: number | null; taishin: boolean }
 
@@ -95,6 +97,51 @@ function slashLabel(iso: string) {
 
 function taipeiStamp(now = new Date()) {
   return now.toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 19)
+}
+
+function taipeiParts(now = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  }).formatToParts(new Date(now))
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  const hour = get('hour') === '24' ? '00' : get('hour')
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    hm: `${hour}:${get('minute')}`,
+    weekday: get('weekday'),
+  }
+}
+
+/** 從「11月5日」還原今年的 ISO 日期（跨年邊界用當下年份） */
+function periodToIso(period: string | undefined, today: string) {
+  const match = String(period ?? '').match(/(\d{1,2})月(\d{1,2})日/)
+  if (!match) return ''
+  const year = Number(today.slice(0, 4))
+  return `${year}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`
+}
+
+function marketAsOf(bundle: InsightBundle | null) {
+  const card = bundle?.cards.find((row) => row.id === 'market')
+  if (!card) return ''
+  if (card.asOf) return card.asOf
+  return periodToIso(card.period, taipeiParts().date)
+}
+
+/** 快取過期：超過 TTL，或平日收盤後大盤日期還停在昨天（換日／上游剛公布） */
+function bundleStale(bundle: InsightBundle | null, at: number) {
+  if (!bundle) return true
+  if (Date.now() - at > BUNDLE_TTL_MS) return true
+  const { date, hm, weekday } = taipeiParts()
+  if (weekday === 'Sat' || weekday === 'Sun' || hm < CLOSE_PUBLISH_HM) return false
+  const asOf = marketAsOf(bundle)
+  return !asOf || asOf < date
 }
 
 function metric(partial: Partial<InsightMetric> & Pick<InsightMetric, 'id' | 'title' | 'source'>): InsightMetric {
@@ -585,6 +632,7 @@ async function buildBundle(previous: InsightBundle | null): Promise<InsightBundl
           tone: toneOf(last.change),
         }),
         kind: 'market',
+        asOf: last.date,
       }
     : oldMarket
       ? { ...oldMarket, note: '沿用上次資料' }
@@ -646,9 +694,47 @@ export async function getInsightBundle(force: boolean) {
       bundleAt = Number.isFinite(saved) ? saved : 0
     }
   }
-  if (force || !bundleMemory) return { bundle: await refreshBundle(), fromCache: false }
-  if (Date.now() - bundleAt > BUNDLE_TTL_MS) void refreshBundle().catch(() => null)
-  return { bundle: bundleMemory, fromCache: true }
+  const stale = force || !bundleMemory || bundleStale(bundleMemory, bundleAt)
+  // 收盤後若還是昨天的大盤，一定要等這次抓完再回（不要先吐舊的讓頁面卡住）
+  const mustWait =
+    force ||
+    !bundleMemory ||
+    (() => {
+      const { date, hm, weekday } = taipeiParts()
+      if (weekday === 'Sat' || weekday === 'Sun' || hm < CLOSE_PUBLISH_HM) return false
+      const asOf = marketAsOf(bundleMemory)
+      return !asOf || asOf < date
+    })()
+  if (mustWait) return { bundle: await refreshBundle(), fromCache: false }
+  if (stale) void refreshBundle().catch(() => null)
+  return { bundle: bundleMemory!, fromCache: true }
+}
+
+/** 伺服器啟動後背景每 20 分鐘抓一次；部署重啟也會立刻跑一輪，不用等人開分析頁 */
+export function startInsightRefresh() {
+  void refreshBundle().catch(() => null)
+  const timer = setInterval(() => void refreshBundle().catch(() => null), BUNDLE_TTL_MS)
+  timer.unref?.()
+}
+
+/** 報告裡引用的大盤日期（從 markdown 第一行「前一日大盤」解析） */
+function reportMarketIso(report: InsightReport | null) {
+  const line = report?.markdown?.split('\n').find((row) => row.includes('前一日大盤')) ?? ''
+  const match = line.match(/（(\d{1,2})月(\d{1,2})日）/)
+  if (!match) return ''
+  return periodToIso(`${match[1]}月${match[2]}日`, taipeiParts().date)
+}
+
+/** 大盤日期比報告新時，用規則引擎重寫報告（不必等人按按鈕）；有金鑰也不在背景呼叫 Grok */
+export async function maybeRefreshInsightReport(rows: InsightQuote[] = []) {
+  const { bundle } = await getInsightBundle(false)
+  const asOf = marketAsOf(bundle)
+  if (!asOf) return null
+  const previous = await readInsightReport()
+  if (previous && reportMarketIso(previous) >= asOf) return previous
+  const report = rulesReport(bundle, rows, previous?.note?.includes('Grok') ? previous.note : '收盤資料更新後自動重算（規則引擎）。')
+  await writeJson(reportFile, report)
+  return report
 }
 
 export async function readInsightReport() {

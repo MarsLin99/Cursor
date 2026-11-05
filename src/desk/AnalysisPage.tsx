@@ -291,7 +291,32 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
   }
 
   useEffect(() => {
-    void load().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '讀取失敗'))
+    const boot = async () => {
+      await load()
+      // 平日 15:05 後若大盤還不是今天，強制重抓一次（避開只吃到部署前的舊快取）
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        weekday: 'short',
+      }).formatToParts(new Date())
+      const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+      const hour = get('hour') === '24' ? '00' : get('hour')
+      const hm = `${hour}:${get('minute')}`
+      const weekday = get('weekday')
+      const today = `${Number(get('month'))}月${Number(get('day'))}日`
+      if (weekday !== 'Sat' && weekday !== 'Sun' && hm >= '15:05') {
+        const market = (await (await fetch('/api/board/insight')).json()) as InsightPayload
+        const card = market.cards?.find((row) => row.id === 'market')
+        if (!card?.period || card.period !== today) await load(true)
+        else setData(market)
+      }
+    }
+    void boot().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '讀取失敗'))
     const timer = window.setInterval(() => void load().catch(() => null), 5 * 60_000)
     return () => window.clearInterval(timer)
   }, [])
