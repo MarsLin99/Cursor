@@ -486,6 +486,13 @@
   align-content: start;
 }
 
+.quote-empty {
+  padding: 1.2rem 0.6rem;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.9rem;
+}
+
 .spark-row:empty::after {
   content: '在下方報價列表勾選走勢後，圖會顯示在這裡';
   grid-column: 1 / -1;

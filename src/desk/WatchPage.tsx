@@ -13,24 +13,15 @@ type Item = {
 }
 
 const STORAGE_KEY = 'desk-watchlist-v2'
-const DEFAULTS: Item[] = [
-  { symbol: '2330', name: '台積電', market: 'twse', chart: false },
-  { symbol: '00631L', name: '元大台灣50正2', market: 'twse', chart: false },
-  { symbol: '00409A', name: '主動復華全球50', market: 'twse', chart: true },
-  { symbol: '2385', name: '群光', market: 'twse', chart: true },
-  { symbol: '2618', name: '長榮航', market: 'twse', chart: true },
-  { symbol: '3363', name: '上詮', market: 'tpex', chart: true },
-]
-
+/** 每台電腦／瀏覽器各自存在 localStorage；新開的從空列表開始，清空後也保持空的 */
 function loadItems(): Item[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return DEFAULTS
+    if (!raw) return []
     const parsed = JSON.parse(raw) as Item[]
-    if (!Array.isArray(parsed) || !parsed.length) return DEFAULTS
-    return parsed
+    return Array.isArray(parsed) ? parsed : []
   } catch {
-    return DEFAULTS
+    return []
   }
 }
 
@@ -754,6 +745,13 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
                 </tr>
               </thead>
               <tbody>
+                {!items.length && (
+                  <tr>
+                    <td colSpan={99} className="quote-empty">
+                      列表是空的，輸入股票代號加入
+                    </td>
+                  </tr>
+                )}
                 {items.map((item, index) => {
                   const quote = bySymbol.get(item.symbol)
                   return (
