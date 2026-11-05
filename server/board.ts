@@ -25,7 +25,6 @@ const trumpZhFile = path.join(dataDir, 'trump-zh.json')
 const tickerFile = path.join(dataDir, 'ticker-cache.json')
 const sparkLiveFile = path.join(dataDir, 'spark-live.json')
 const sparkWatchFile = path.join(dataDir, 'spark-watch.json')
-const sparkForceFile = path.join(dataDir, 'spark-force.json')
 
 const SLOTS = ['08:40', '14:00', '15:10', '21:00']
 const UA = 'Mozilla/5.0 (compatible; TaHedgeLab/1.0)'
@@ -801,11 +800,6 @@ type SparkLiveFile = {
   symbols?: Record<string, SparkBook>
 }
 
-type SparkForceFile = {
-  date?: string
-  symbols?: Record<string, { bias?: number; force?: SparkBook['force'] }>
-}
-
 /** 台新／Fugle 加權指數可能寫成 t00 或 IX0001 */
 const INDEX_KEYS = ['t00', 'IX0001', 'IR0001'] as const
 
@@ -1053,11 +1047,6 @@ function stampMinute(stamp: string) {
   return h * 60 + m
 }
 
-function stampSeconds(stamp: string) {
-  const [h, m, s] = stamp.split(':').map(Number)
-  return h * 3600 + m * 60 + (s || 0)
-}
-
 function inSparkSession(m: number) {
   return m >= SPARK_OPEN && m <= SPARK_CLOSE
 }
@@ -1231,26 +1220,67 @@ function splitByClose(bar: MinuteBar): [number, number] {
   return [outer, volume - outer]
 }
 
-/** 累積張數差序列 → 每分鐘淨張數。strict 時第一分鐘（基準不明）與斷線超過 3 分鐘後的那一分鐘不採用 */
-function minuteNets(series: SparkForce[] | undefined, fromZero: boolean) {
-  const nets = new Map<number, number>()
-  if (!series?.length) return nets
-  const sorted = [...series].sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0))
-  let baseD: number | null = fromZero ? 0 : null
-  let baseSec: number | null = fromZero ? SPARK_OPEN * 60 : null
-  let i = 0
-  while (i < sorted.length) {
-    const m = stampMinute(sorted[i].t)
-    const firstSec = stampSeconds(sorted[i].t)
-    let j = i
-    while (j + 1 < sorted.length && stampMinute(sorted[j + 1].t) === m) j++
-    const lastD = sorted[j].d
-    if (baseD != null && baseSec != null && (fromZero || firstSec - baseSec <= 180)) nets.set(m, lastD - baseD)
-    baseD = lastD
-    baseSec = stampSeconds(sorted[j].t)
-    i = j + 1
+/** 13:25 起收盤集合競價（試撮），這段不算買賣力 */
+const CLOSE_AUCTION = 13 * 60 + 25
+
+type DayReference = { date: string; prev: number | null; limitUp: number | null; limitDown: number | null; official: boolean; open: number | null }
+
+/** 每檔每個交易日鎖住一次的參考價：昨收、漲停、跌停、開盤，之後來源切換（台新／鉅亨）也不會變 */
+const dayReferences = new Map<string, DayReference>()
+
+let lastSparkLive: SparkLiveFile | null = null
+
+/** 台股升降單位（同參考程式 tickSize） */
+function tickSize(price: number) {
+  if (price < 10) return 0.01
+  if (price < 50) return 0.05
+  if (price < 100) return 0.1
+  if (price < 500) return 0.5
+  if (price < 1000) return 1
+  return 5
+}
+
+function roundToTick(price: number, direction: 1 | -1) {
+  let value = price
+  for (let i = 0; i < 4; i++) {
+    const step = tickSize(value)
+    value = direction > 0 ? Math.ceil((value - 1e-9) / step) * step : Math.floor((value + 1e-9) / step) * step
   }
-  return nets
+  const step = tickSize(value)
+  return Number(value.toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0))
+}
+
+function officialBand(prev: number | null, up: number | null, down: number | null) {
+  if (prev == null || prev <= 0 || up == null || down == null) return false
+  const high = up / prev
+  const low = down / prev
+  return high >= 1.02 && high <= 1.35 && low >= 0.65 && low <= 0.98
+}
+
+function dayReference(
+  symbol: string,
+  date: string,
+  seen: { prev: number | null; limitUp: number | null; limitDown: number | null; open: number | null },
+): DayReference {
+  const old = dayReferences.get(symbol)
+  const ref: DayReference =
+    old && old.date === date ? { ...old } : { date, prev: null, limitUp: null, limitDown: null, official: false, open: null }
+  if (ref.prev == null && seen.prev != null && seen.prev > 0) ref.prev = seen.prev
+  if (!ref.official) {
+    if (officialBand(ref.prev, seen.limitUp, seen.limitDown)) {
+      // 台新／鉅亨給的官方漲跌停（含槓桿 ETF 的特殊幅度）
+      ref.limitUp = seen.limitUp
+      ref.limitDown = seen.limitDown
+      ref.official = true
+    } else if (ref.prev != null && ref.limitUp == null) {
+      // 暫時沒有官方值：昨收 ±10% 依升降單位進位，拿到官方值再換一次
+      ref.limitUp = roundToTick(ref.prev * 1.1, 1)
+      ref.limitDown = roundToTick(ref.prev * 0.9, -1)
+    }
+  }
+  if (ref.open == null && seen.open != null && seen.open > 0) ref.open = seen.open
+  if (date) dayReferences.set(symbol, ref)
+  return ref
 }
 
 function buildSpark(
@@ -1258,7 +1288,6 @@ function buildSpark(
   live: LiveSparkBook | undefined,
   liveDate: string,
   ext: ExternalDay | null,
-  tech: SparkForceFile | null,
 ): SparkBook | null {
   const today = taipeiDate()
   const liveToday = live != null && (liveDate === today || liveDate === today.replace(/-/g, ''))
@@ -1298,71 +1327,53 @@ function buildSpark(
     points.push(point)
   }
 
-  // 買賣力：每分鐘外盤、內盤。台新優先（逐分桶 → 技術指標歷史 → 累積差），否則用一分K估
-  const extMap = new Map(extBars.map((bar) => [bar.m, bar]))
-  const liveMinutes = useLive ? (live?.minutes ?? {}) : {}
-  const liveNets = useLive ? minuteNets(live?.force, false) : new Map<number, number>()
-  const techRow = tech?.date === sessionDate ? tech?.symbols?.[symbol] : undefined
-  const techNets = minuteNets(techRow?.force, true)
-  const minutes = new Set<number>()
-  for (const bar of extBars) minutes.add(bar.m)
-  for (const key of Object.keys(liveMinutes)) minutes.add(stampMinute(key))
-  for (const m of liveNets.keys()) minutes.add(m)
-  for (const m of techNets.keys()) minutes.add(m)
-  for (const m of covered) minutes.add(m)
-  for (const m of carried) minutes.add(m)
-
+  // 買賣力（同參考程式 apply_flow／split_by_close）：每根一分K（鉅亨優先、Yahoo 補）依收盤落在高低區間的位置
+  // 拆成外盤／內盤，逐分累積。台新逐筆的內外盤判定跟參考程式出入很大，13:25 後還會把收盤試撮量算進來，
+  // 所以只在完全抓不到一分K時才退回台新每分鐘外內盤（並排除 13:25–13:29 試撮）。
   const flow: SparkFlow[] = []
   const force: SparkForce[] = []
   let cum = 0
   let taishinMinutes = 0
   let estMinutes = 0
-  for (const m of [...minutes].filter(inSparkSession).sort((a, b) => a - b)) {
-    const bar = extMap.get(m)
-    const vol = bar?.v ?? 0
-    // 台新該分鐘只收到一部分（剛訂閱、斷線重連）時，張數會和一分K量差很多，改用估計
-    const fitsTotal = (total: number) => !bar || vol <= 0 || (total >= vol * 0.5 && total <= vol * 1.5)
-    const fitsNet = (net: number) => !bar || vol <= 0 || Math.abs(net) <= vol * 1.5
-    const fromNet = (net: number): [number, number] =>
-      bar && vol >= Math.abs(net) ? [(vol + net) / 2, (vol - net) / 2] : [Math.max(net, 0), Math.max(-net, 0)]
-    let pair: [number, number] | null = null
-    let src: SparkFlow['src'] = 'taishin'
-    const bucket = liveMinutes[hms(m).slice(0, 5)]
-    if (bucket) {
-      if (fitsTotal(bucket[0] + bucket[1])) pair = [bucket[0], bucket[1]]
-    } else if (techNets.has(m) && fitsNet(techNets.get(m)!)) {
-      pair = fromNet(techNets.get(m)!)
-    } else if (liveNets.has(m) && fitsNet(liveNets.get(m)!)) {
-      pair = fromNet(liveNets.get(m)!)
-    }
-    if (!pair && bar) {
-      pair = splitByClose(bar)
-      src = 'est'
-    }
-    // 沒成交的分鐘：買賣力 0，累積值延續
-    if (!pair && carried.has(m)) {
-      pair = [0, 0]
-      src = 'est'
-    }
-    if (!pair) continue
-    if (src === 'taishin') taishinMinutes++
-    else estMinutes++
+  const pushFlow = (m: number, pair: [number, number], src: SparkFlow['src']) => {
     cum += pair[0] - pair[1]
     flow.push({ t: hms(m), out: Math.round(pair[0] * 10) / 10, inn: Math.round(pair[1] * 10) / 10, src })
     force.push({ t: hms(m), d: Math.round(cum) })
+  }
+  if (extBars.length) {
+    for (const bar of extBars) {
+      if (!inSparkSession(bar.m)) continue
+      pushFlow(bar.m, splitByClose(bar), 'est')
+      estMinutes++
+    }
+  } else if (useLive) {
+    const rows = Object.entries(live?.minutes ?? {})
+      .map(([key, pair]) => [stampMinute(key), pair] as const)
+      .filter(([m]) => inSparkSession(m) && !(m >= CLOSE_AUCTION && m < SPARK_CLOSE))
+      .sort((a, b) => a[0] - b[0])
+    for (const [m, pair] of rows) {
+      pushFlow(m, [pair[0], pair[1]], 'taishin')
+      taishinMinutes++
+    }
   }
 
   const q = ext?.quote ?? null
   const meta = useLive ? live : undefined
   const lastPoint = points.at(-1)
+  const ref = dayReference(symbol, sessionDate, {
+    prev: meta?.prev ?? q?.prev ?? null,
+    limitUp: meta?.limitUp ?? q?.limitUp ?? null,
+    limitDown: meta?.limitDown ?? q?.limitDown ?? null,
+    open: meta?.open ?? (extBars[0] && extBars[0].m <= SPARK_OPEN + 5 ? extBars[0].o : null) ?? livePoints[0]?.p ?? null,
+  })
   return {
     symbol,
     name: live?.name || q?.name || symbol,
-    limitUp: meta?.limitUp ?? q?.limitUp ?? null,
-    limitDown: meta?.limitDown ?? q?.limitDown ?? null,
-    open: meta?.open ?? extBars[0]?.o ?? null,
+    limitUp: ref.limitUp,
+    limitDown: ref.limitDown,
+    open: ref.open,
     price: meta?.price ?? q?.price ?? lastPoint?.p ?? null,
-    prev: meta?.prev ?? q?.prev ?? null,
+    prev: ref.prev,
     bid: meta?.bid ?? null,
     ask: meta?.ask ?? null,
     high: meta?.high ?? q?.high ?? null,
@@ -1646,10 +1657,10 @@ export function attachBoard(middlewares: {
       if (url.pathname === '/api/board/spark' && req.method === 'GET') {
         const wanted = sparkItems(url.searchParams.get('items') ?? '')
         await rememberSparkWatch(wanted.map((item) => item.symbol))
-        const [saved, tech] = await Promise.all([
-          readJson<SparkLiveFile>(sparkLiveFile),
-          readJson<SparkForceFile>(sparkForceFile),
-        ])
+        // 台新 bridge 正在寫檔時偶爾讀到半個 JSON：沿用上一份，不讓這一輪掉回外部來源
+        const fresh = await readJson<SparkLiveFile>(sparkLiveFile)
+        if (fresh) lastSparkLive = fresh
+        const saved = fresh ?? lastSparkLive
         const live = (saved?.symbols ?? {}) as Record<string, LiveSparkBook>
         const books = await Promise.all(
           wanted.map(async (item) =>
@@ -1658,7 +1669,6 @@ export function attachBoard(middlewares: {
               live[item.symbol],
               saved?.date ?? '',
               await externalDay(item.symbol, item.market).catch(() => null),
-              tech,
             ),
           ),
         )

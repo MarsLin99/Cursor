@@ -42,6 +42,7 @@ function priceBand(book?: SparkBook) {
   }
   const anchor = prev ?? book?.open ?? book?.price
   if (anchor == null || anchor <= 0) return null
+  // 後端已鎖定昨收與漲跌停；這裡只是還沒拿到資料時的暫時框
   return { up: anchor * 1.1, down: anchor * 0.9 }
 }
 
@@ -445,9 +446,13 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
         const res = await fetch(`/api/board/spark?items=${encodeURIComponent(symbols)}`)
         if (!res.ok || stop) return
         const rows = (await res.json()) as SparkBook[]
-        const next: Record<string, SparkBook> = {}
-        for (const row of rows) next[row.symbol] = row
-        setBooks(next)
+        // 某一輪少了某檔（來源暫時失敗）就沿用上一份，漲跌停線與 Y 軸不會跳
+        setBooks((prev) => {
+          const next: Record<string, SparkBook> = {}
+          for (const item of chartItems) if (prev[item.symbol]) next[item.symbol] = prev[item.symbol]
+          for (const row of rows) next[row.symbol] = row
+          return next
+        })
       } catch {
         /* 下一輪再讀行情檔 */
       }
