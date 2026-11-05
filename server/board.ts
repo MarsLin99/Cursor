@@ -809,9 +809,21 @@ function sparkSymbols(raw: string) {
   ]
 }
 
+// 台新訂閱名單：任何畫面（走勢圖勾選或報價列表）10 分鐘內要過的代號都保留，
+// 避免多個分頁/裝置互相覆蓋造成反覆退訂、漏收逐筆。
+const sparkSeen = new Map<string, number>()
+let sparkWatchSaved = ''
+const SPARK_KEEP_MS = 10 * 60 * 1000
+
 async function rememberSparkWatch(symbols: string[]) {
-  if (!symbols.length) return
-  await writeJson(sparkWatchFile, { symbols: symbols.slice(0, 50) })
+  const now = Date.now()
+  for (const symbol of symbols) sparkSeen.set(symbol, now)
+  for (const [symbol, at] of sparkSeen) if (now - at > SPARK_KEEP_MS) sparkSeen.delete(symbol)
+  const list = [...sparkSeen.entries()].sort((x, y) => y[1] - x[1]).slice(0, 50).map(([symbol]) => symbol).sort()
+  const key = list.join(',')
+  if (!list.length || key === sparkWatchSaved) return
+  sparkWatchSaved = key
+  await writeJson(sparkWatchFile, { symbols: list })
 }
 
 function taipeiDate(now = new Date()) {
@@ -1225,6 +1237,7 @@ export function attachBoard(middlewares: {
             return { symbol, market: market === 'tpex' ? 'tpex' as const : 'twse' as const }
           })
           .filter((item): item is { symbol: string; market: 'twse' | 'tpex' } => item != null)
+        await rememberSparkWatch(items.map((item) => item.symbol.toUpperCase()).filter((symbol) => /^[0-9A-Z]{4,6}$/.test(symbol)))
         send(res, 200, await fetchQuotesPreferTaishin(items))
         return
       }
