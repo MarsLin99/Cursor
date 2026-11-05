@@ -779,13 +779,15 @@ async function taishinLiveStatus() {
       !saved?.date ||
       saved.date === today ||
       saved.date === today.replace(/-/g, '')
-    const hasIndex = INDEX_KEYS.some((key) => {
+    // 台新 quote_bridge 只訂閱個股，不一定有指數；有任一檔報價就算有資料
+    const hasIndex = Object.values(saved?.symbols ?? {}).some((book) => book != null && book.price != null) || INDEX_KEYS.some((key) => {
       const book = saved?.symbols?.[key]
       return book != null && book.price != null
     })
     const fresh = age < 90_000
     const flagged = saved?.connected === true
-    const connected = Boolean(dateOk && hasIndex && (flagged || fresh) && (fresh || !twSession()))
+    // 開盤前／收盤後，橋接程式仍標示連線中，就算昨天的資料也亮燈
+    const connected = Boolean((dateOk || !twSession()) && hasIndex && (flagged || fresh) && (fresh || !twSession()))
     return {
       connected,
       source: connected ? ('taishin' as const) : ('none' as const),
