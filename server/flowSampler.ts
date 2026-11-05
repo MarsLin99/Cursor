@@ -1,0 +1,237 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+
+/**
+ * 內外盤抽樣（與 OneWebStock 參考程式 record_flow / trade_side / refresh_mis_book 同一套規則）：
+ * - 每 ~0.15 秒（加上請求時間）抓一次鉅亨即時報價（成交價、累積量、報價時間）
+ * - 每 1.2 秒抓一次證交所 MIS 最佳一檔委買／委賣，4 秒內的才算新鮮
+ * - 兩次報價間累積量增加的張數，整筆歸到「報價時間」那一分鐘：
+ *   成交價 ≥ 委賣 → 外盤；≤ 委買 → 內盤；否則跟上一次價格比漲跌；再不行沿用上一次方向；都沒有就各半
+ * - buildSpark 使用時：該分鐘抽樣總量在一分K量的 0.5～1.5 倍之間才採用，否則用 split_by_close 估
+ * 參考程式只放記憶體；這裡每天存到 data/flow-samples.json，重啟不會遺失。
+ */
+
+type Market = 'twse' | 'tpex'
+type Side = -1 | 0 | 1
+type FlowState = { volume: number | null; price: number | null; side: Side }
+type BookRow = { bid: number | null; ask: number | null; at: number }
+type SampleFile = {
+  date: string
+  markets: Record<string, Market>
+  flow: Record<string, Record<string, [number, number]>>
+  state: Record<string, FlowState>
+  price: Record<string, number>
+}
+
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
+const QUOTE_GAP_MS = 150
+const BOOK_GAP_MS = 1200
+const BOOK_FRESH_MS = 4000
+const KEEP_MS = 10 * 60_000
+
+let file = ''
+let samples: SampleFile = emptyFile('')
+let dirty = false
+let started = false
+const books = new Map<string, BookRow>()
+const seen = new Map<string, { market: Market; at: number }>()
+
+function emptyFile(date: string): SampleFile {
+  return { date, markets: {}, flow: {}, state: {}, price: {} }
+}
+
+function num(value: unknown) {
+  if (value == null || value === '' || value === '-') return null
+  const n = Number(String(value).replace(/,/g, ''))
+  return Number.isFinite(n) ? n : null
+}
+
+function taipeiParts(ms: number) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  }).formatToParts(new Date(ms))
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  const hour = get('hour') === '24' ? '00' : get('hour')
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, hm: `${hour}:${get('minute')}`, weekday: get('weekday') }
+}
+
+/** 平日 08:55～14:30（鉅亨報價時間常落後，收盤後多留一段讓最後幾分鐘的量進來） */
+function sampling(now = Date.now()) {
+  const { hm, weekday } = taipeiParts(now)
+  return weekday !== 'Sat' && weekday !== 'Sun' && hm >= '08:55' && hm <= '14:30'
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function getJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
+  const res = await fetch(url, { headers: { 'User-Agent': UA, ...headers }, signal: AbortSignal.timeout(8000) })
+  if (!res.ok) throw new Error(`${res.status} ${url}`)
+  return (await res.json()) as T
+}
+
+function watched() {
+  const now = Date.now()
+  for (const [symbol, row] of seen) if (now - row.at > KEEP_MS) seen.delete(symbol)
+  const out = new Map<string, Market>()
+  for (const [symbol, market] of Object.entries(samples.markets)) out.set(symbol, market)
+  for (const [symbol, row] of seen) out.set(symbol, row.market)
+  return out
+}
+
+/** 走勢圖要過的代號都抽樣（同參考程式：自選清單上的每一檔） */
+export function noteFlowSymbols(items: { symbol: string; market: Market }[]) {
+  const now = Date.now()
+  for (const item of items) {
+    seen.set(item.symbol, { market: item.market, at: now })
+    if (samples.markets[item.symbol] !== item.market) {
+      samples.markets[item.symbol] = item.market
+      dirty = true
+    }
+  }
+}
+
+/** trade_side：先比委買委賣，再比上一筆價格，最後沿用上一次方向 */
+function tradeSide(price: number | null, prevPrice: number | null, bid: number | null, ask: number | null, last: Side): Side {
+  if (price == null) return last || 0
+  if (ask != null && ask !== 0 && price >= ask) return 1
+  if (bid != null && bid !== 0 && price <= bid) return -1
+  if (prevPrice != null && prevPrice !== 0) {
+    if (price > prevPrice) return 1
+    if (price < prevPrice) return -1
+  }
+  return last || 0
+}
+
+function recordFlow(symbol: string, price: number | null, volume: number | null, quoteTs: number | null) {
+  if (!symbol || volume == null) return
+  const now = Date.now()
+  const book = books.get(symbol)
+  const fresh = book != null && now - book.at < BOOK_FRESH_MS
+  const state = samples.state[symbol] ?? { volume: null, price: null, side: 0 }
+  let side = state.side
+  if (quoteTs && state.volume != null && volume > state.volume && price != null) {
+    const delta = volume - state.volume
+    const s = tradeSide(price, state.price, fresh ? book.bid : null, fresh ? book.ask : null, state.side)
+    const key = taipeiParts(Math.floor(quoteTs / 60) * 60 * 1000).hm
+    const minutes = (samples.flow[symbol] ??= {})
+    const bucket = (minutes[key] ??= [0, 0])
+    if (s > 0) bucket[0] += delta
+    else if (s < 0) bucket[1] += delta
+    else {
+      bucket[0] += delta / 2
+      bucket[1] += delta / 2
+    }
+    side = s || state.side
+    dirty = true
+  }
+  samples.state[symbol] = { volume, price: price ?? state.price, side }
+  if (price != null) samples.price[symbol] = price
+}
+
+type CnyesQuotes = { statusCode?: number; data?: Record<string, unknown>[] }
+
+async function sampleOnce() {
+  const list = watched()
+  if (!list.size) return
+  const symbols = [...list].map(([symbol, market]) => `${market === 'tpex' ? 'OTC' : 'TWS'}:${symbol}:STOCK`)
+  const json = await getJson<CnyesQuotes>(`https://ws.api.cnyes.com/ws/api/v1/quote/quotes/${symbols.join(',')}`)
+  if (json.statusCode !== 200) return
+  for (const row of json.data ?? []) {
+    const symbol = String(row['200010'] ?? '').toUpperCase()
+    if (!list.has(symbol)) continue
+    let ts = num(row['200007'])
+    if (ts != null && ts > 10_000_000_000) ts = ts / 1000
+    if (ts != null) rollDate(taipeiParts(ts * 1000).date)
+    recordFlow(symbol, num(row['6']), num(row['200013']), ts)
+  }
+}
+
+type MisPayload = { msgArray?: { c?: string; a?: string; b?: string }[] }
+
+async function refreshBook() {
+  const list = watched()
+  if (!list.size) return
+  const channels = [...list].map(([symbol, market]) => `${market === 'tpex' ? 'otc' : 'tse'}_${symbol}.tw`).join('|')
+  const json = await getJson<MisPayload>(
+    `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(channels).replace(/%7C/g, '|')}&json=1&delay=0`,
+    { Referer: 'https://mis.twse.com.tw/stock/index.jsp' },
+  )
+  const now = Date.now()
+  for (const row of json.msgArray ?? []) {
+    const code = String(row.c ?? '').trim()
+    if (!code) continue
+    books.set(code, { bid: num(String(row.b ?? '').split('_')[0]), ask: num(String(row.a ?? '').split('_')[0]), at: now })
+  }
+}
+
+/** 換日就重來（參考程式不重置，昨天的累積量會讓今早一段時間都抽不到樣，這裡不沿用） */
+function rollDate(date: string) {
+  if (!date || date === samples.date) return
+  const markets = samples.markets
+  samples = emptyFile(date)
+  samples.markets = markets
+  dirty = true
+}
+
+async function save() {
+  if (!dirty || !file) return
+  dirty = false
+  try {
+    await mkdir(path.dirname(file), { recursive: true })
+    const temp = `${file}.tmp`
+    await writeFile(temp, JSON.stringify(samples))
+    const { rename } = await import('node:fs/promises')
+    await rename(temp, file)
+  } catch {
+    dirty = true
+  }
+}
+
+async function loop(step: () => Promise<void>, gap: number) {
+  for (;;) {
+    if (sampling()) {
+      try {
+        await step()
+      } catch {
+        /* 下一輪再試 */
+      }
+      await sleep(gap)
+    } else {
+      await sleep(20_000)
+    }
+  }
+}
+
+export async function startFlowSampler(dataDir: string) {
+  if (started) return
+  started = true
+  file = path.join(dataDir, 'flow-samples.json')
+  try {
+    const saved = JSON.parse(await readFile(file, 'utf8')) as SampleFile
+    if (saved && typeof saved === 'object' && saved.flow) samples = { ...emptyFile(''), ...saved }
+  } catch {
+    /* 第一次啟動 */
+  }
+  void loop(refreshBook, BOOK_GAP_MS)
+  void loop(sampleOnce, QUOTE_GAP_MS)
+  const timer = setInterval(() => void save(), 10_000)
+  timer.unref?.()
+}
+
+/** 某檔某天每分鐘抽樣到的 [外盤, 內盤] 張數 */
+export function flowSamples(symbol: string, date: string) {
+  return samples.date === date ? (samples.flow[symbol] ?? {}) : {}
+}
+
+/** 抽樣用的最新鉅亨成交價（參考程式用它改寫最後一根一分K的收盤） */
+export function sampledPrice(symbol: string, date: string) {
+  return samples.date === date ? (samples.price[symbol] ?? null) : null
+}

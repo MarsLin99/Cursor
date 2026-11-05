@@ -15,6 +15,7 @@ import type {
 } from '../src/desk/types.ts'
 import { getInsightBundle, makeInsightReport, readInsightReport } from './insight.ts'
 import { startTaishinFeed, taishinConnectedNow } from './taishin.ts'
+import { flowSamples, noteFlowSymbols, sampledPrice, startFlowSampler } from './flowSampler.ts'
 
 const dataDir = path.join(process.cwd(), 'data')
 const macroFile = path.join(dataDir, 'macro-cache.json')
@@ -1151,7 +1152,8 @@ async function fetchYahooMinutes(symbol: string, market: 'twse' | 'tpex') {
       h: finiteOf(q?.high?.[i]) ?? c,
       l: finiteOf(q?.low?.[i]) ?? c,
       c,
-      v: (finiteOf(q?.volume?.[i]) ?? 0) / 1000,
+      // 同參考程式 lots_from_shares：股數 ÷ 1000 四捨五入成張
+      v: Math.round((finiteOf(q?.volume?.[i]) ?? 0) / 1000),
     })
   }
   return bars
@@ -1327,9 +1329,9 @@ function buildSpark(
     points.push(point)
   }
 
-  // 買賣力（同參考程式 apply_flow／split_by_close）：每根一分K（鉅亨優先、Yahoo 補）依收盤落在高低區間的位置
-  // 拆成外盤／內盤，逐分累積。台新逐筆的內外盤判定跟參考程式出入很大，13:25 後還會把收盤試撮量算進來，
-  // 所以只在完全抓不到一分K時才退回台新每分鐘外內盤（並排除 13:25–13:29 試撮）。
+  // 買賣力（同參考程式 apply_flow）：每根一分K（鉅亨優先、Yahoo 補），該分鐘有即時抽樣（鉅亨成交＋MIS 委買賣判內外盤）
+  // 且抽樣總量在這根量的 0.5～1.5 倍之間就用抽樣，否則依收盤落在高低區間的位置拆（split_by_close），逐分累積。
+  // 台新逐筆的內外盤判定跟參考程式出入很大，13:25 後還會把收盤試撮量算進來，所以只在完全抓不到一分K時才退回台新。
   const flow: SparkFlow[] = []
   const force: SparkForce[] = []
   let cum = 0
@@ -1341,10 +1343,25 @@ function buildSpark(
     force.push({ t: hms(m), d: Math.round(cum) })
   }
   if (extBars.length) {
-    for (const bar of extBars) {
+    const sampled = flowSamples(symbol, sessionDate)
+    // 參考程式先把最後一根的收盤改成鉅亨即時價（高低跟著擴），再拆內外盤
+    const livePrice = sampledPrice(symbol, sessionDate)
+    const bars = extBars.map((bar, index) =>
+      index === extBars.length - 1 && livePrice != null
+        ? { ...bar, c: livePrice, h: Math.max(bar.h, livePrice), l: Math.min(bar.l, livePrice) }
+        : bar,
+    )
+    for (const bar of bars) {
       if (!inSparkSession(bar.m)) continue
-      pushFlow(bar.m, splitByClose(bar), 'est')
-      estMinutes++
+      const sample = sampled[hms(bar.m).slice(0, 5)]
+      const total = sample ? sample[0] + sample[1] : 0
+      if (bar.v > 0 && sample && total >= 0.5 * bar.v && total <= 1.5 * bar.v) {
+        pushFlow(bar.m, [sample[0], sample[1]], 'mis')
+        taishinMinutes++
+      } else {
+        pushFlow(bar.m, splitByClose(bar), 'est')
+        estMinutes++
+      }
     }
   } else if (useLive) {
     const rows = Object.entries(live?.minutes ?? {})
@@ -1607,6 +1624,7 @@ export function attachBoard(middlewares: {
       if (stale(memory)) void scanMacro()
       maybeRefreshTicker()
       maybeRefreshSectors()
+      void startFlowSampler(dataDir)
       await startTaishinFeed()
     })()
     timer = setInterval(() => {
@@ -1657,6 +1675,7 @@ export function attachBoard(middlewares: {
       if (url.pathname === '/api/board/spark' && req.method === 'GET') {
         const wanted = sparkItems(url.searchParams.get('items') ?? '')
         await rememberSparkWatch(wanted.map((item) => item.symbol))
+        noteFlowSymbols(wanted)
         // 台新 bridge 正在寫檔時偶爾讀到半個 JSON：沿用上一份，不讓這一輪掉回外部來源
         const fresh = await readJson<SparkLiveFile>(sparkLiveFile)
         if (fresh) lastSparkLive = fresh
