@@ -276,17 +276,19 @@ async function yahooOnce() {
     const at = Date.parse(String(row.regularMarketTime ?? ''))
     if (!symbol || out == null || inn == null || !Number.isFinite(at)) continue
     const { date, hm } = taipeiParts(at)
-    // Do not let yesterday's pre-open quote roll storage backwards. Closing auction is excluded.
-    if (date !== taipeiParts(Date.now()).date || hm < '09:00' || hm >= '13:25') continue
+    // Keep today's session; closing-auction prints (13:25–13:30) still carry final 外/內 —
+    // bucket them into 13:24 so force bars freeze after 13:24 as Mars expects.
+    if (date !== taipeiParts(Date.now()).date || hm < '09:00' || hm > '13:30') continue
+    const bucket = hm >= '13:25' ? '13:24' : hm
     if (date !== yahoo.date) {
       await saveYahoo()
       yahoo = { date, flow: {} }
       yahooDirty = true
     }
     const minutes = (yahoo.flow[symbol] ??= {})
-    const last = minutes[hm]
+    const last = minutes[bucket]
     if (!last || last[0] !== out || last[1] !== inn) {
-      minutes[hm] = [out, inn]
+      minutes[bucket] = [out, inn]
       yahooDirty = true
     }
   }
