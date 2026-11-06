@@ -104,7 +104,6 @@ function MarketCard({ card }: { card: InsightCard }) {
               <span className="macro-party-value">{party.text}</span>
             </p>
           ))}
-          {card.institutions?.dateLabel ? <p className="macro-note">法人 {card.institutions.dateLabel}</p> : null}
         </div>
         {bars.length ? (
           <div className="fut-bars">
