@@ -339,16 +339,31 @@ async function refreshSectors() {
     if (!pack.sectors.length) return
     const base = memory ?? (await readJson<CacheShape>(macroFile)) ?? emptySnapshot()
     const liveIndex = live?.index
+    // 加權指數：台新 spark-live t00 優先，其次 MIS t00（已帶 Referer），都沒有才沿用快取
+    const spark = await readSparkLive().catch(() => ({} as Record<string, SparkBook>))
+    const tsBook = liveBook(spark, 't00')
+    let indexFromTs: CacheShape['index'] | null = null
+    if (tsBook?.price != null && (tsBook.prev ?? 0) > 0) {
+      const prev = tsBook.prev as number
+      const change = tsBook.price - prev
+      indexFromTs = {
+        price: tsBook.price,
+        change,
+        pct: Math.round((change / prev) * 10000) / 100,
+        date: pack.date || base.index.date,
+        time: tsBook.time || pack.time,
+      }
+    }
     memory = {
       ...base,
       sectors: pack.sectors,
       sectorsAt: new Date().toISOString(),
       sectorsTime: pack.time,
       flowUpdated,
-      // 盤中加權指數跟 MIS t00 走；只改 date 會讓標題旁跌點／跌幅整日卡在昨收
-      index: liveIndex?.price != null
-        ? liveIndex
-        : { ...base.index, date: pack.date || base.index.date },
+      index: indexFromTs
+        ?? (liveIndex?.price != null
+          ? liveIndex
+          : { ...base.index, date: pack.date || base.index.date }),
     }
     await writeJson(macroFile, memory)
     flowAt = Date.now()
@@ -886,7 +901,7 @@ async function taishinLiveStatus() {
       !saved?.date ||
       saved.date === today ||
       saved.date === today.replace(/-/g, '')
-    // 台新 quote_bridge 只訂閱個股，不一定有指數；有任一檔報價就算有資料
+    // 台新有任一檔現價（含加權 t00）就算有資料
     const hasIndex = Object.values(saved?.symbols ?? {}).some((book) => book != null && book.price != null) || INDEX_KEYS.some((key) => {
       const book = saved?.symbols?.[key]
       return book != null && book.price != null
@@ -993,8 +1008,9 @@ async function fetchQuotesPreferTaishin(
     time: '',
   })
   let base = items.map((item) => bySymbol.get(item.symbol) ?? blank(item))
+  // overlaySpark：有台新現價就覆寫（含 t00／IX0001）
   base = overlaySpark(base, live)
-  // 台新 bridge 不訂閱加權指數；MIS 偶發斷線時用 Yahoo ^TWII，標題旁跌點才會動
+  // 加權指數順位：台新 spark-live t00 → MIS t00 → Yahoo ^TWII
   if (base.some((row) => row.symbol === 't00' && row.price == null)) {
     const twii = await fetchYahooTwii().catch(() => null)
     if (twii) {
