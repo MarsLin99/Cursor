@@ -89,13 +89,18 @@ function watched() {
 /** 走勢圖要過的代號都抽樣（同參考程式：自選清單上的每一檔） */
 export function noteFlowSymbols(items: { symbol: string; market: Market }[]) {
   const now = Date.now()
-  for (const item of items) {
+  let added = false
+  for (const raw of items) {
+    const item = { ...raw, symbol: raw.symbol.toUpperCase() }
+    if (!seen.has(item.symbol)) added = true
     seen.set(item.symbol, { market: item.market, at: now })
     if (samples.markets[item.symbol] !== item.market) {
       samples.markets[item.symbol] = item.market
       dirty = true
     }
   }
+  // A newly requested symbol must not wait for the next scheduled loop.
+  if (added) void pollYahooNow(true)
 }
 
 /** trade_side：先比委買委賣，再比上一筆價格，最後沿用上一次方向 */
@@ -218,6 +223,9 @@ const YAHOO_GAP_MS = 3000
 let yahooFile = ''
 let yahoo: YahooFile = { date: '', flow: {} }
 let yahooDirty = false
+let yahooPending: Promise<void> | null = null
+let yahooPolledAt = 0
+let yahooQueued = false
 
 function yahooWindow(now = Date.now()) {
   const { hm, weekday } = taipeiParts(now)
@@ -242,8 +250,13 @@ async function yahooOnce() {
     const at = Date.parse(String(row.regularMarketTime ?? ''))
     if (!symbol || out == null || inn == null || !Number.isFinite(at)) continue
     const { date, hm } = taipeiParts(at)
-    if (hm < '09:00' || hm > '13:30') continue
-    if (date !== yahoo.date) yahoo = { date, flow: {} }
+    // Do not let yesterday's pre-open quote roll storage backwards. Closing auction is excluded.
+    if (date !== taipeiParts(Date.now()).date || hm < '09:00' || hm >= '13:25') continue
+    if (date !== yahoo.date) {
+      await saveYahoo()
+      yahoo = { date, flow: {} }
+      yahooDirty = true
+    }
     const minutes = (yahoo.flow[symbol] ??= {})
     const last = minutes[hm]
     if (!last || last[0] !== out || last[1] !== inn) {
@@ -258,25 +271,39 @@ async function saveYahoo() {
   yahooDirty = false
   try {
     const { rename } = await import('node:fs/promises')
-    await writeFile(`${yahooFile}.tmp`, JSON.stringify(yahoo))
+    const payload = JSON.stringify(yahoo)
+    await mkdir(path.dirname(yahooFile), { recursive: true })
+    // Retain every trading day's minute history, not just the most recent day.
+    const archive = path.join(path.dirname(yahooFile), 'yahoo-flow-' + yahoo.date + '.json')
+    await writeFile(archive + '.tmp', payload)
+    await rename(archive + '.tmp', archive)
+    await writeFile(`${yahooFile}.tmp`, payload)
     await rename(`${yahooFile}.tmp`, yahooFile)
   } catch {
     yahooDirty = true
   }
 }
 
+/** Throttled shared poll; all client-requested symbols are retained in the market registry. */
+export function pollYahooNow(immediate = false): Promise<void> {
+  if (!started || !yahooFile || !yahooWindow()) return Promise.resolve()
+  if (yahooPending) {
+    if (immediate) yahooQueued = true
+    return yahooPending
+  }
+  if (!immediate && Date.now() - yahooPolledAt < YAHOO_GAP_MS) return Promise.resolve()
+  yahooPolledAt = Date.now()
+  yahooPending = yahooOnce().then(() => saveYahoo()).catch(() => { /* next poll retries */ }).finally(() => {
+    yahooPending = null
+    if (yahooQueued) { yahooQueued = false; void pollYahooNow(true) }
+  })
+  return yahooPending
+}
+
 async function yahooLoop() {
   for (;;) {
-    if (yahooWindow()) {
-      try {
-        await yahooOnce()
-      } catch {
-        /* 下一輪再試 */
-      }
-      await sleep(YAHOO_GAP_MS)
-    } else {
-      await sleep(20_000)
-    }
+    await pollYahooNow()
+    await sleep(yahooWindow() ? YAHOO_GAP_MS : 20_000)
   }
 }
 
@@ -303,8 +330,6 @@ export async function startFlowSampler(dataDir: string) {
     /* 第一次啟動 */
   }
   void yahooLoop()
-  const yahooTimer = setInterval(() => void saveYahoo(), 10_000)
-  yahooTimer.unref?.()
   void loop(refreshBook, BOOK_GAP_MS)
   void loop(sampleOnce, QUOTE_GAP_MS)
   const timer = setInterval(() => void save(), 10_000)

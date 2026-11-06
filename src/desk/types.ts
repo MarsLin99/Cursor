@@ -100,12 +100,12 @@ export type IntradayBar = {
 export type SparkPoint = { t: string; p: number }
 export type SparkForce = { t: string; d: number }
 /** 每分鐘外盤／內盤張數。taishin＝台新逐筆，est＝依一分K收盤位置估計 */
-/** src：taishin＝台新外內盤、mis＝即時抽樣（同參考程式）、est＝一分K估 */
+/** yahoo: vendor cumulative primary; est: provisional offset-aligned Taishin history. */
 export type SparkFlow = {
   t: string
-  out: number
-  inn: number
-  /** 這一分鐘（外盤−內盤）張數差＝買賣力條狀圖那一條 */
+  out: number | null
+  inn: number | null
+  /** Minute change in cumulative (out - in), in lots; bars use cum instead. */
   net?: number
   /** 開盤到這一分鐘的累積（外盤−內盤）張數＝買賣力條狀圖那一條 */
   cum?: number
@@ -141,6 +141,8 @@ export type SparkBook = {
     /** 沒有成交的分鐘沿用上一筆價補的點數 */
     carriedPoints?: number
     taishinMinutes: number
+    forcePrimary?: 'yahoo'
+    carriedForceMinutes?: number
     yahooMinutes?: number
     estMinutes: number
     /** Yahoo 最新累積（外盤−內盤）與其時間，供對照 */

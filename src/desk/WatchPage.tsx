@@ -78,9 +78,9 @@ function flowRows(book?: SparkBook): FlowRow[] {
   if (book?.flow?.length) {
     let running = 0
     return book.flow.map((row) => {
-      const net = row.net ?? row.out - row.inn
+      const net = row.net ?? (row.out ?? 0) - (row.inn ?? 0)
       running = row.cum ?? running + net
-      return { minute: Math.floor(minuteOf(row.t)), out: row.out, inn: row.inn, net, cum: running, est: row.src !== 'taishin' }
+      return { minute: Math.floor(minuteOf(row.t)), out: row.out, inn: row.inn, net, cum: running, est: row.src === 'est' }
     })
   }
   // 舊格式只有累積序列：每分鐘取最後一筆
