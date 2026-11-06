@@ -133,19 +133,42 @@ function ListCard({ card }: { card: InsightCard }) {
   return (
     <article className={`macro-card list${items.length > 6 ? ' dense' : ''}`}>
       <div className="metric-stack">
-        {items.map((item) => (
-          <div key={item.id} className="metric-row" title={item.note ? `${item.source}：${item.note}` : item.source}>
-            <div className="metric-top">
-              <span className="metric-name">{item.title}</span>
-              <Status item={item} />
-              <span className="metric-date">{item.period}</span>
+        {items.map((item) => {
+          const tip = item.href
+            ? `${item.source} · 開啟資料來源`
+            : item.note
+              ? `${item.source}：${item.note}`
+              : item.source
+          const body = (
+            <>
+              <div className="metric-top">
+                <span className="metric-name">{item.title}</span>
+                <Status item={item} />
+                <span className="metric-date">{item.period}</span>
+              </div>
+              <div className="metric-bottom">
+                <span className="metric-value">{item.value}</span>
+                {item.detail ? <span className={`metric-delta ${item.detailTone}`}>{item.detail}</span> : null}
+              </div>
+            </>
+          )
+          return item.href ? (
+            <a
+              key={item.id}
+              className="metric-row has-source"
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={tip}
+            >
+              {body}
+            </a>
+          ) : (
+            <div key={item.id} className="metric-row" title={tip}>
+              {body}
             </div>
-            <div className="metric-bottom">
-              <span className="metric-value">{item.value}</span>
-              {item.detail ? <span className={`metric-delta ${item.detailTone}`}>{item.detail}</span> : null}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </article>
   )

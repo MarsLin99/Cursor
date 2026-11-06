@@ -169,6 +169,8 @@ export type InsightMetric = {
   tone: InsightTone
   note: string
   source: string
+  /** 點進去開資料來源（官方／抓取用的公開頁） */
+  href?: string
   /** 這一筆資料本身的日期（YYYY-MM-DD 或 YYYY-MM），用來判斷要不要再抓 */
   asOf?: string
   /** 景氣燈號用圓點，其餘用膠囊 */

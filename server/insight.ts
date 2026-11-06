@@ -176,6 +176,7 @@ async function fetchIsm() {
     id: 'ism',
     title: '美國 ISM 製造業',
     source: 'Trading Economics',
+    href: 'https://tradingeconomics.com/united-states/business-confidence',
     value: latest.toFixed(1),
     asOf: `${latestYear}-${String(latestMonth).padStart(2, '0')}`,
     period: monthLabel(latestYear, latestMonth),
@@ -219,6 +220,7 @@ async function fetchSahm() {
     id: 'sahm',
     title: '薩姆規則',
     source: 'BLS 失業率',
+    href: 'https://www.bls.gov/cps/',
     value: (Math.abs(last.value) < 0.005 ? 0 : last.value).toFixed(2),
     asOf: `${last.year}-${String(last.month).padStart(2, '0')}`,
     period: monthLabel(last.year, last.month),
@@ -303,6 +305,7 @@ async function fetchLights() {
     id: 'light',
     title: '景氣燈號',
     source: '國發會',
+    href: 'https://data.gov.tw/dataset/6099',
     asOf: `${last.year}-${String(last.month).padStart(2, '0')}`,
     value: last.score.toFixed(0),
     period: monthLabel(last.year, last.month),
@@ -329,6 +332,7 @@ async function fetchExports() {
     id: 'export',
     title: '台灣出口年增率',
     source: '財政部統計處',
+    href: 'https://www.mof.gov.tw/txtStatistics/5a74f75c9e704b16ad32a41625b20faa',
     asOf: `${year}-${String(month).padStart(2, '0')}`,
     value: `${signed(pct, 1)}%`,
     period: monthLabel(year, month),
@@ -359,6 +363,7 @@ async function fetchCnbc() {
       id,
       title,
       source: 'CNBC',
+      href: `https://www.cnbc.com/quotes/${encodeURIComponent(symbol)}`,
       asOf: when.length === 10 ? when : '',
       value: fixed(last, digits),
       period: when.length === 10 ? dayLabel(when) : when,
@@ -397,6 +402,7 @@ async function fetchBai() {
     id: 'bai',
     title: 'BAI 空運',
     source: 'TAC Index',
+    href: 'https://dashboard.tacindex.com/',
     asOf: when.length >= 10 ? when.slice(0, 10) : '',
     value: fixed(last, 0),
     period: when.length >= 10 ? dayLabel(when.slice(0, 10)) : when,
@@ -702,6 +708,17 @@ async function fetchRetail(): Promise<{ asOf: string; points: RetailPoint[] }> {
     const text = new TextDecoder('big5').decode(buf)
     return text.startsWith('交易日期') ? text : ''
   }
+  // 三大法人未平倉：結束日若尚未公布（盤後／假日）會回 HTML「日期時間錯誤」，需往前退
+  const downloadInst = async (start: Date, end: Date) => {
+    const buf = await fetchBuf(
+      `https://www.taifex.com.tw/cht/3/dlFutContractsDateDown?queryStartDate=${slash(start)}&queryEndDate=${slash(end)}`,
+      'https://www.taifex.com.tw/',
+      {},
+      40000,
+    )
+    const text = new TextDecoder('big5').decode(buf)
+    return text.startsWith('日期') ? text : ''
+  }
   let end = now
   let latest = ''
   for (let back = 0; back < 6 && !latest; back++) {
@@ -709,23 +726,23 @@ async function fetchRetail(): Promise<{ asOf: string; points: RetailPoint[] }> {
     latest = await downloadQuotes(new Date(end.getTime() - 28 * 86400_000), end)
   }
   if (!latest) throw new Error('期交所沒有微台行情')
+  let inst = ''
+  for (let back = 0; back < 8 && !inst; back++) {
+    const instEnd = new Date(now.getTime() - back * 86400_000)
+    inst = await downloadInst(new Date(instEnd.getTime() - 90 * 86400_000), instEnd)
+    if (inst) end = instEnd
+  }
+  if (!inst) throw new Error('期交所沒有微台資料')
   const chunks = [latest]
   for (let i = 1; i < 3; i++) {
     const chunkEnd = new Date(end.getTime() - i * 29 * 86400_000)
     const text = await downloadQuotes(new Date(chunkEnd.getTime() - 28 * 86400_000), chunkEnd)
     if (text) chunks.push(text)
   }
-  const quotes = chunks.join('\n')
-  const instStart = new Date(end.getTime() - 90 * 86400_000)
-  const inst = new TextDecoder('big5').decode(
-    await fetchBuf(
-      `https://www.taifex.com.tw/cht/3/dlFutContractsDateDown?queryStartDate=${slash(instStart)}&queryEndDate=${slash(end)}`,
-      'https://www.taifex.com.tw/',
-      {},
-      40000,
-    ),
-  )
-  if (!quotes.startsWith('交易日期') || !inst.startsWith('日期')) throw new Error('期交所沒有微台資料')
+  // 法人成功日可能比行情回補日更早；行情再對齊一次，避免只用「今天」空檔
+  const aligned = await downloadQuotes(new Date(end.getTime() - 28 * 86400_000), end)
+  const quotes = (aligned || chunks.join('\n'))
+  if (!quotes.startsWith('交易日期')) throw new Error('期交所沒有微台資料')
   const oi = new Map<string, number>()
   for (const line of quotes.split(/\r?\n/)) {
     const cells = line.split(',').map((cell) => cell.trim())

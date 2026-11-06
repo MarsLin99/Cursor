@@ -1115,6 +1115,21 @@
 .insight .fut-bar.up, .insight .fut-bar.down { color: inherit; }
 .metric-stack { display: flex; flex-direction: column; gap: 10.6px; width: 100%; }
 .metric-row { padding-bottom: 10.6px; border-bottom: 1.3px solid rgba(15, 61, 62, 0.08); }
+a.metric-row {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.metric-row.has-source:hover {
+  background: rgba(15, 61, 62, 0.04);
+  border-radius: 8px;
+}
+a.metric-row.has-source:hover .metric-name {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .metric-row:last-child { padding-bottom: 0; border-bottom: 0; }
 .metric-top { display: flex; align-items: center; gap: 10.6px; min-width: 0; }
 .metric-name {
