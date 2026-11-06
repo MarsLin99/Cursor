@@ -13,6 +13,7 @@ import type {
   InsightTone,
   MarginSnapshot,
   OverlayPoint,
+  RetailPoint,
   QuoteRow,
 } from '../src/desk/types.ts'
 
@@ -24,9 +25,6 @@ const bundleFile = path.join(dataDir, 'insight-bundle.json')
 const reportFile = path.join(dataDir, 'insight-report.json')
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
-const BUNDLE_TTL_MS = 20 * 60 * 1000
-/** 證交所收盤後約 15:00～17:00 陸續公布當日 FMTQIK／三大法人／期貨；融資維持率多半要到晚上約 21:30 */
-const CLOSE_PUBLISH_HM = '15:05'
 
 export type InsightQuote = { quote: QuoteRow; force: number | null; taishin: boolean }
 
@@ -39,8 +37,8 @@ async function fetchBuf(url: string, referer: string, headers: Record<string, st
   return Buffer.from(await res.arrayBuffer())
 }
 
-async function fetchJson<T>(url: string, referer: string, headers: Record<string, string> = {}) {
-  return JSON.parse((await fetchBuf(url, referer, headers)).toString('utf8')) as T
+async function fetchJson<T>(url: string, referer: string, headers: Record<string, string> = {}, timeout = 25000) {
+  return JSON.parse((await fetchBuf(url, referer, headers, timeout)).toString('utf8')) as T
 }
 
 function num(raw: unknown): number | null {
@@ -134,15 +132,6 @@ function marketAsOf(bundle: InsightBundle | null) {
   return periodToIso(card.period, taipeiParts().date)
 }
 
-/** 快取過期：超過 TTL，或平日收盤後大盤日期還停在昨天（換日／上游剛公布） */
-function bundleStale(bundle: InsightBundle | null, at: number) {
-  if (!bundle) return true
-  if (Date.now() - at > BUNDLE_TTL_MS) return true
-  const { date, hm, weekday } = taipeiParts()
-  if (weekday === 'Sat' || weekday === 'Sun' || hm < CLOSE_PUBLISH_HM) return false
-  const asOf = marketAsOf(bundle)
-  return !asOf || asOf < date
-}
 
 function metric(partial: Partial<InsightMetric> & Pick<InsightMetric, 'id' | 'title' | 'source'>): InsightMetric {
   return {
@@ -188,6 +177,7 @@ async function fetchIsm() {
     title: '美國 ISM 製造業',
     source: 'Trading Economics',
     value: latest.toFixed(1),
+    asOf: `${latestYear}-${String(latestMonth).padStart(2, '0')}`,
     period: monthLabel(latestYear, latestMonth),
     detail: signed(delta, 1),
     detailTone: toneOf(delta),
@@ -230,6 +220,7 @@ async function fetchSahm() {
     title: '薩姆規則',
     source: 'BLS 失業率',
     value: (Math.abs(last.value) < 0.005 ? 0 : last.value).toFixed(2),
+    asOf: `${last.year}-${String(last.month).padStart(2, '0')}`,
     period: monthLabel(last.year, last.month),
     detail: signed(delta, 2),
     detailTone: toneOf(delta),
@@ -312,6 +303,7 @@ async function fetchLights() {
     id: 'light',
     title: '景氣燈號',
     source: '國發會',
+    asOf: `${last.year}-${String(last.month).padStart(2, '0')}`,
     value: last.score.toFixed(0),
     period: monthLabel(last.year, last.month),
     status: name,
@@ -321,32 +313,27 @@ async function fetchLights() {
 }
 
 async function fetchExports() {
-  const text = (await fetchBuf('https://opendata.customs.gov.tw/data/6053/csv.csv', 'https://portal.sw.nat.gov.tw/')).toString('utf8')
-  const totals = new Map<string, number>()
-  for (const row of csvRows(text)) {
-    const year = num(row['年度'])
-    const month = num(row['月份'])
-    const value = num(row['出口總值(新臺幣千元)'])
-    if (year != null && month != null && value != null) totals.set(`${year}-${month}`, value)
-  }
-  const changes = [...totals]
-    .map(([key, value]) => {
-      const [year, month] = key.split('-').map(Number)
-      const base = totals.get(`${year - 1}-${month}`)
-      return base ? { year: year + 1911, month, pct: ((value - base) / base) * 100 } : null
-    })
-    .filter((row): row is { year: number; month: number; pct: number } => row != null)
-    .sort((a, b) => a.year - b.year || a.month - b.month)
-  const last = changes[changes.length - 1]
-  if (!last) throw new Error('找不到出口年增率')
+  // 關務署開放資料慢一個月。財政部統計處的初步統計才是對外公布的出口年增率（美元計）
+  const html = (
+    await fetchBuf(
+      'https://www.mof.gov.tw/txtStatistics/5a74f75c9e704b16ad32a41625b20faa',
+      'https://www.mof.gov.tw/',
+    )
+  ).toString('utf8')
+  const found = html.match(/(\d+)年(\d+)月出口[\s\S]{0,500}?與上年同期比較：[\s\S]{0,160}?(-?\d+(?:\.\d+)?)%/)
+  if (!found) throw new Error('找不到出口年增率')
+  const year = Number(found[1]) + 1911
+  const month = Number(found[2])
+  const pct = Number(found[3])
   return metric({
     id: 'export',
     title: '台灣出口年增率',
-    source: '關務署',
-    value: `${signed(last.pct, 1)}%`,
-    period: monthLabel(last.year, last.month),
-    status: last.pct >= 0 ? '成長' : '衰退',
-    tone: toneOf(last.pct),
+    source: '財政部統計處',
+    asOf: `${year}-${String(month).padStart(2, '0')}`,
+    value: `${signed(pct, 1)}%`,
+    period: monthLabel(year, month),
+    status: pct >= 0 ? '成長' : '衰退',
+    tone: toneOf(pct),
   })
 }
 
@@ -372,6 +359,7 @@ async function fetchCnbc() {
       id,
       title,
       source: 'CNBC',
+      asOf: when.length === 10 ? when : '',
       value: fixed(last, digits),
       period: when.length === 10 ? dayLabel(when) : when,
       detail: `${signed(change, digits)}${pct != null ? ` ${signed(pct, 2)}%` : ''}`,
@@ -409,6 +397,7 @@ async function fetchBai() {
     id: 'bai',
     title: 'BAI 空運',
     source: 'TAC Index',
+    asOf: when.length >= 10 ? when.slice(0, 10) : '',
     value: fixed(last, 0),
     period: when.length >= 10 ? dayLabel(when.slice(0, 10)) : when,
     detail: `${signed(change, 0)}${pct != null ? ` ${signed(pct, 1)}%` : ''}`,
@@ -467,6 +456,7 @@ async function fetchInstitutions() {
   })
   const iso = isoOf(json.date ?? '')
   return {
+    date: iso,
     dateLabel: iso ? dayLabel(iso) : '',
     items: [party('外資', foreign), party('投信', trust), party('自營商', dealer)],
   }
@@ -509,48 +499,166 @@ async function fetchDerivatives() {
     const value = byDay.get(day)! - byDay.get(window[i])!
     return { label: slashLabel(day), value, level: byDay.get(day)!, tone: toneOf(value) }
   })
-  return { dateLabel: dayLabel(days[days.length - 1]), title: '外資未平倉增減', unit: '口', bars }
+  return { date: days[days.length - 1], dateLabel: dayLabel(days[days.length - 1]), title: '外資未平倉增減', unit: '口', bars }
+}
+
+const MARGIN_LABEL = '大盤融資維持率'
+const MARGIN_SOURCE = '證交所'
+const MARGIN_BASIS = 'listed-market-value'
+const marketFile = path.join(dataDir, 'margin-market.json')
+
+type MarketPoint = { date: string; keepRate: number; balance: number }
+type MarketStore = { basis: string; through: string; closes: Record<string, number>; points: MarketPoint[] }
+type TwseDoc = { stat?: string; tables?: { title?: string; data?: string[][] }[] }
+
+function pause(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 上市大盤融資維持率＝融資股票市值／融資金額。停牌沒有收盤價時沿用上一個交易日 */
+async function marginDay(iso: string) {
+  const date = iso.replaceAll('-', '')
+  const referer = 'https://www.twse.com.tw/'
+  const [margin, prices] = await Promise.all([
+    fetchJson<TwseDoc>(
+      `https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date=${date}&selectType=ALL&response=json`,
+      referer,
+      {},
+      40000,
+    ),
+    fetchJson<TwseDoc>(
+      `https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=${date}&type=ALL&response=json`,
+      referer,
+      {},
+      40000,
+    ),
+  ])
+  if (margin.stat !== 'OK' || prices.stat !== 'OK') return null
+  const tables = margin.tables ?? []
+  const summary = tables.find((table) => String(table.title ?? '').includes('信用交易'))
+  const detail = tables.find((table) => String(table.title ?? '').includes('彙總'))
+  const amount = num(summary?.data?.find((row) => String(row[0]).includes('融資金額'))?.[5])
+  const quote = (prices.tables ?? []).find((table) => String(table.title ?? '').includes('每日收盤'))
+  if (amount == null || !detail?.data || !quote?.data) return null
+  const balances = new Map<string, number>()
+  for (const row of detail.data) {
+    const shares = num(row[6])
+    if (shares) balances.set(String(row[0]).trim(), shares)
+  }
+  const closes = new Map<string, number>()
+  for (const row of quote.data) {
+    const close = num(row[8])
+    if (close != null) closes.set(String(row[0]).trim(), close)
+  }
+  return { amount, balances, closes }
+}
+
+async function loadDay(iso: string) {
+  let last: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await marginDay(iso)
+    } catch (error) {
+      last = error
+      await pause(1000 * (attempt + 1))
+    }
+  }
+  throw last instanceof Error ? last : new Error('上市融資維持率讀取失敗')
 }
 
 async function fetchMargin() {
-  const referer = 'https://www.twse.com.tw/dashboard/zh/credit/margin.html'
-  const trend = await fetchJson<{ stat?: string; data?: Record<string, unknown>[] }>(
-    'https://www.twse.com.tw/rwd/zh/marginTrading/BFIJ3U_TREND?response=json&days=60',
-    referer,
-  )
-  if (trend.stat !== 'OK') throw new Error(trend.stat || '融資維持率讀取失敗')
-  const rows = new Map<string, number>()
-  for (const item of trend.data ?? []) {
-    const date = isoOf(String(item.date ?? ''))
-    const rate = num(item.keepRate)
-    if (date && rate != null) rows.set(date, rate)
-  }
-  let latest: MarginSnapshot | null = null
-  try {
-    const kpi = await fetchJson<Record<string, unknown>>('https://www.twse.com.tw/rwd/zh/marginTrading/BFIJ3U?response=json', referer)
-    if (kpi.stat === 'OK') {
-      latest = {
-        date: isoOf(String(kpi.date ?? '')),
-        keepRate: num(kpi.keepRate),
-        callAccNum: num(kpi.callAccNum),
-        exeAccNum: num(kpi.exeAccNum),
-        belowAccNum: num(kpi.belowAccNum),
-        marginAccRate: num(kpi.marginAccRate),
-      }
-      if (latest.date && latest.keepRate != null) rows.set(latest.date, latest.keepRate)
+  const taiex = await fetchTaiexSeries(8)
+  const lastDay = taiex[taiex.length - 1]?.date
+  if (!lastDay) throw new Error('沒有加權交易日')
+  const windowStart = shiftDate(lastDay, -183)
+  const days = taiex.map((day) => day.date).filter((date) => date >= shiftDate(windowStart, -21))
+  const saved = await readJson<MarketStore>(marketFile)
+  const store = saved?.basis === MARGIN_BASIS ? saved : null
+  const closes = new Map<string, number>(Object.entries(store?.closes ?? {}))
+  const points = (store?.points ?? []).filter((point) => point.date >= windowStart && point.date <= (store?.through ?? ''))
+  const through = store?.through && points.length ? store.through : ''
+  if (through >= lastDay && points.length >= 100 && points[points.length - 1]?.date === lastDay) {
+    const last = points[points.length - 1]
+    return {
+      series: points,
+      latest: {
+        date: last.date,
+        keepRate: last.keepRate,
+        balance: last.balance,
+        callAccNum: null,
+        exeAccNum: null,
+        belowAccNum: null,
+        marginAccRate: null,
+      } satisfies MarginSnapshot,
     }
-  } catch {
-    // 只缺最新一筆時，仍可用趨勢最後一天
   }
-  const series = [...rows].map(([date, keepRate]) => ({ date, keepRate })).sort((a, b) => a.date.localeCompare(b.date))
-  if (!latest && series.length) {
-    const last = series[series.length - 1]
-    latest = { date: last.date, keepRate: last.keepRate, callAccNum: null, exeAccNum: null, belowAccNum: null, marginAccRate: null }
+  const pending: Promise<{ date: string; day: Awaited<ReturnType<typeof loadDay>> }>[] = []
+  const queue = days.filter((date) => date > through)
+  console.log(`[insight] 上市大盤融資維持率補 ${queue.length} 個交易日`)
+  const pump = () => {
+    while (pending.length < 2 && queue.length) {
+      const date = queue.shift()!
+      pending.push(loadDay(date).then((day) => ({ date, day })))
+    }
   }
-  return { series, latest }
+  pump()
+  let fetched = 0
+  while (pending.length) {
+    const { date, day } = await pending.shift()!
+    pump()
+    if (!day) {
+      if (date === lastDay) throw new Error('上市融資維持率還沒公布')
+      continue
+    }
+    for (const [code, price] of day.closes) closes.set(code, price)
+    if (date >= windowStart) {
+      let marketValue = 0
+      for (const [code, shares] of day.balances) {
+        const price = closes.get(code)
+        if (price == null) continue
+        marketValue += price * shares * 1000
+      }
+      const keepRate = (marketValue / (day.amount * 1000)) * 100
+      points.push({ date, keepRate, balance: day.amount / 100_000 })
+    }
+    fetched += 1
+    if (fetched % 8 === 0) {
+      await writeJson(marketFile, {
+        basis: MARGIN_BASIS,
+        through: date,
+        closes: Object.fromEntries(closes),
+        points,
+      } satisfies MarketStore)
+      console.log(`[insight] 大盤融資維持率已補到 ${date}，${points.length} 筆`)
+    }
+    await pause(80)
+  }
+  const last = points[points.length - 1]
+  if (!last || last.date !== lastDay) throw new Error('上市融資維持率還沒公布')
+  await writeJson(marketFile, {
+    basis: MARGIN_BASIS,
+    through: last.date,
+    closes: Object.fromEntries(closes),
+    points,
+  } satisfies MarketStore)
+  return {
+    series: points,
+    latest: {
+      date: last.date,
+      keepRate: last.keepRate,
+      balance: last.balance,
+      callAccNum: null,
+      exeAccNum: null,
+      belowAccNum: null,
+      marginAccRate: null,
+    } satisfies MarginSnapshot,
+  }
 }
 
-function overlayOf(margin: { date: string; keepRate: number }[], taiex: TaiexDay[]): OverlayPoint[] {
+function overlayOf(
+  margin: { date: string; keepRate: number; balance: number | null }[],
+  taiex: TaiexDay[],
+): OverlayPoint[] {
   const closes = new Map(taiex.map((day) => [day.date, day.close]))
   return margin.map((row) => {
     let taiexClose = closes.get(row.date) ?? null
@@ -558,8 +666,103 @@ function overlayOf(margin: { date: string; keepRate: number }[], taiex: TaiexDay
       const before = taiex.filter((day) => day.date <= row.date)
       taiexClose = before.length ? before[before.length - 1].close : null
     }
-    return { date: row.date, keepRate: row.keepRate, taiex: taiexClose }
+    return { date: row.date, keepRate: row.keepRate, balance: row.balance, taiex: taiexClose }
   })
+}
+
+async function postForm(url: string, referer: string, fields: Record<string, string>) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'User-Agent': UA,
+      Referer: referer,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(fields),
+    signal: AbortSignal.timeout(40000),
+  })
+  if (!res.ok) throw new Error(`${new URL(url).host} ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
+}
+
+/** 微台散戶多空比＝（散戶多單−散戶空單）／全市場未平倉。散戶＝全市場扣掉三大法人 */
+async function fetchRetail(): Promise<{ asOf: string; points: RetailPoint[] }> {
+  const now = new Date(Date.now() + 8 * 3600_000)
+  const slash = (d: Date) =>
+    `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`
+  // 行情下載超過約一個月會回錯誤頁；當天未公布也是。一次抓 28 天，往前接三段
+  const downloadQuotes = async (start: Date, end: Date) => {
+    const buf = await postForm('https://www.taifex.com.tw/cht/3/futDataDown', 'https://www.taifex.com.tw/cht/3/futDailyMarketView', {
+      down_type: '1',
+      commodity_id: 'TMF',
+      commodity_id2: '',
+      queryStartDate: slash(start),
+      queryEndDate: slash(end),
+    })
+    const text = new TextDecoder('big5').decode(buf)
+    return text.startsWith('交易日期') ? text : ''
+  }
+  let end = now
+  let latest = ''
+  for (let back = 0; back < 6 && !latest; back++) {
+    end = new Date(now.getTime() - back * 86400_000)
+    latest = await downloadQuotes(new Date(end.getTime() - 28 * 86400_000), end)
+  }
+  if (!latest) throw new Error('期交所沒有微台行情')
+  const chunks = [latest]
+  for (let i = 1; i < 3; i++) {
+    const chunkEnd = new Date(end.getTime() - i * 29 * 86400_000)
+    const text = await downloadQuotes(new Date(chunkEnd.getTime() - 28 * 86400_000), chunkEnd)
+    if (text) chunks.push(text)
+  }
+  const quotes = chunks.join('\n')
+  const instStart = new Date(end.getTime() - 90 * 86400_000)
+  const inst = new TextDecoder('big5').decode(
+    await fetchBuf(
+      `https://www.taifex.com.tw/cht/3/dlFutContractsDateDown?queryStartDate=${slash(instStart)}&queryEndDate=${slash(end)}`,
+      'https://www.taifex.com.tw/',
+      {},
+      40000,
+    ),
+  )
+  if (!quotes.startsWith('交易日期') || !inst.startsWith('日期')) throw new Error('期交所沒有微台資料')
+  const oi = new Map<string, number>()
+  for (const line of quotes.split(/\r?\n/)) {
+    const cells = line.split(',').map((cell) => cell.trim())
+    if (cells.length < 18 || cells[0] === '交易日期' || cells[17] !== '一般') continue
+    const open = num(cells[11])
+    if (open == null) continue
+    const [y, m, d] = cells[0].split('/')
+    const date = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+    oi.set(date, (oi.get(date) ?? 0) + open)
+  }
+  const longs = new Map<string, number>()
+  const shorts = new Map<string, number>()
+  for (const line of inst.split(/\r?\n/)) {
+    const cells = line.split(',').map((cell) => cell.trim())
+    if (cells.length < 14 || cells[1] !== '微型臺指期貨') continue
+    const who = cells[2]
+    if (!who.startsWith('外資') && who !== '投信' && who !== '自營商') continue
+    const long = num(cells[9])
+    const short = num(cells[11])
+    if (long == null || short == null) continue
+    const [y, m, d] = cells[0].split('/')
+    const date = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+    longs.set(date, (longs.get(date) ?? 0) + long)
+    shorts.set(date, (shorts.get(date) ?? 0) + short)
+  }
+  const points: RetailPoint[] = [...oi.keys()].sort().flatMap((date) => {
+    const total = oi.get(date) ?? 0
+    const long = longs.get(date)
+    const short = shorts.get(date)
+    if (!total || long == null || short == null) return []
+    const retailLong = total - long
+    const retailShort = total - short
+    return [{ date, ratio: ((retailLong - retailShort) / total) * 100 }]
+  })
+  const last = points[points.length - 1]
+  if (!last) throw new Error('微台散戶多空比沒有資料')
+  return { asOf: last.date, points }
 }
 
 async function readJson<T>(file: string) {
@@ -584,8 +787,8 @@ function settled<T>(result: PromiseSettledResult<T>, errors: string[], label: st
 
 async function buildBundle(previous: InsightBundle | null): Promise<InsightBundle> {
   const errors: string[] = []
-  const [taiexR, instR, derivR, marginR, lightR, exportR, cnbcR, baiR, ismR, sahmR] = await Promise.allSettled([
-    fetchTaiexSeries(),
+  const [taiexR, instR, derivR, marginR, lightR, exportR, cnbcR, baiR, ismR, sahmR, retailR] = await Promise.allSettled([
+    fetchTaiexSeries(8),
     fetchInstitutions(),
     fetchDerivatives(),
     fetchMargin(),
@@ -595,11 +798,13 @@ async function buildBundle(previous: InsightBundle | null): Promise<InsightBundl
     fetchBai(),
     fetchIsm(),
     fetchSahm(),
+    fetchRetail(),
   ])
   const taiex = settled(taiexR, errors, '加權指數') ?? []
   const institutions = settled(instR, errors, '三大法人')
   const derivatives = settled(derivR, errors, '期貨部位')
   const margin = settled(marginR, errors, '融資維持率')
+  const retailFresh = settled(retailR, errors, '微台散戶多空比')
   const cnbc = settled(cnbcR, errors, 'CNBC')
   const prevCards = new Map<string, InsightMetric>()
   for (const card of previous?.cards ?? []) {
@@ -656,64 +861,448 @@ async function buildBundle(previous: InsightBundle | null): Promise<InsightBundl
     cards: [market, bundleCard],
     margin: {
       latest: margin?.latest ?? previous?.margin.latest ?? null,
-      label: '全市場擔保維持率',
-      source: 'TWSE 臺股儀表板 BFIJ3U',
+      label: MARGIN_LABEL,
+      source: MARGIN_SOURCE,
+      basis: margin ? MARGIN_BASIS : previous?.margin.basis,
       error: margin ? undefined : errors.find((line) => line.startsWith('融資維持率')),
     },
     overlay,
+    retail: retailFresh
+      ? { latest: retailFresh.points[retailFresh.points.length - 1]?.ratio ?? null, date: retailFresh.asOf, points: retailFresh.points, source: '期交所' }
+      : previous?.retail ?? { latest: null, date: '', points: [], source: '期交所', error: errors.find((line) => line.startsWith('微台')) },
     errors,
   }
 }
 
-let bundleMemory: InsightBundle | null = null
-let bundleAt = 0
-let bundlePending: Promise<InsightBundle> | null = null
-
-function refreshBundle() {
-  if (!bundlePending) {
-    bundlePending = (async () => {
-      try {
-        const next = await buildBundle(bundleMemory ?? (await readJson<InsightBundle>(bundleFile)))
-        bundleMemory = next
-        bundleAt = Date.now()
-        await writeJson(bundleFile, next)
-        return next
-      } finally {
-        bundlePending = null
-      }
-    })()
+function zoneParts(timeZone: string, now = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    weekday: 'short',
+  }).formatToParts(new Date(now))
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  const hour = get('hour') === '24' ? '00' : get('hour').padStart(2, '0')
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    hm: `${hour}:${get('minute').padStart(2, '0')}`,
+    weekday: get('weekday'),
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
   }
-  return bundlePending
+}
+
+function shiftDate(iso: string, days: number) {
+  const [year, month, day] = iso.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day + days, 12)).toISOString().slice(0, 10)
+}
+
+function weekdayOf(iso: string) {
+  const [year, month, day] = iso.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay()
+}
+
+function previousBusinessDay(iso: string) {
+  let day = shiftDate(iso, -1)
+  while (weekdayOf(day) === 0 || weekdayOf(day) === 6) day = shiftDate(day, -1)
+  return day
+}
+
+function latestClock(timeZone: string, afterHm: string, now: number) {
+  const part = zoneParts(timeZone, now)
+  if (part.weekday === 'Sat' || part.weekday === 'Sun' || part.hm < afterHm) return previousBusinessDay(part.date)
+  return part.date
+}
+
+function addMonths(year: number, month: number, delta: number) {
+  const index = year * 12 + (month - 1) + delta
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`
+}
+
+/** 每月固定日公布「上個月」的數字。公布日前，最新應有的是再上一期 */
+function monthlyDataDue(releaseDay: number, releaseHm: string, now: number) {
+  const part = zoneParts('Asia/Taipei', now)
+  const released = part.day > releaseDay || (part.day === releaseDay && part.hm >= releaseHm)
+  const release = released
+    ? `${part.year}-${String(part.month).padStart(2, '0')}`
+    : addMonths(part.year, part.month, -1)
+  const [year, month] = release.split('-').map(Number)
+  return addMonths(year, month, -1)
+}
+
+function firstWeekday(year: number, month: number, weekday: number) {
+  let iso = `${year}-${String(month).padStart(2, '0')}-01`
+  while (weekdayOf(iso) !== weekday) iso = shiftDate(iso, 1)
+  return iso
+}
+
+function firstBusinessDay(year: number, month: number) {
+  let iso = `${year}-${String(month).padStart(2, '0')}-01`
+  while (weekdayOf(iso) === 0 || weekdayOf(iso) === 6) iso = shiftDate(iso, 1)
+  return iso
+}
+
+function usMonthlyDue(releaseDay: (year: number, month: number) => string, releaseHm: string, now: number) {
+  const part = zoneParts('America/New_York', now)
+  const when = releaseDay(part.year, part.month)
+  const released = part.date > when || (part.date === when && part.hm >= releaseHm)
+  const release = released
+    ? `${part.year}-${String(part.month).padStart(2, '0')}`
+    : addMonths(part.year, part.month, -1)
+  const [year, month] = release.split('-').map(Number)
+  return addMonths(year, month, -1)
+}
+
+/** BAI 每週一 17:00 GMT 公布，台北時間是週二 01:00；代號用那個星期一 */
+function baiDue(now: number) {
+  const part = zoneParts('Asia/Taipei', now)
+  let tuesday = part.date
+  while (weekdayOf(tuesday) !== 2) tuesday = shiftDate(tuesday, -1)
+  if (tuesday === part.date && part.hm < '01:10') tuesday = shiftDate(tuesday, -7)
+  return shiftDate(tuesday, -1)
+}
+
+function monthDayKey(period: string, due: string) {
+  const match = period.match(/(\d{1,2})月(\d{1,2})日/)
+  if (!match || due.length < 10) return ''
+  const year = Number(due.slice(0, 4))
+  const month = match[1].padStart(2, '0')
+  const day = match[2].padStart(2, '0')
+  let iso = `${year}-${month}-${day}`
+  if (iso > shiftDate(due, 7)) iso = `${year - 1}-${month}-${day}`
+  return iso
+}
+
+function yearMonthKey(period: string) {
+  const match = period.match(/(\d{4})年(\d{1,2})月/)
+  if (!match) return ''
+  return `${match[1]}-${match[2].padStart(2, '0')}`
+}
+
+function findItem(bundle: InsightBundle, id: string) {
+  for (const card of bundle.cards) {
+    if (card.id === id) return card
+    const hit = card.items?.find((item) => item.id === id)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+function readDay(id: string) {
+  return (bundle: InsightBundle, due: string) => {
+    const item = findItem(bundle, id)
+    if (item?.asOf && /^\d{4}-\d{2}-\d{2}/.test(item.asOf)) return item.asOf.slice(0, 10)
+    return monthDayKey(item?.period ?? '', due)
+  }
+}
+
+function readMonth(id: string) {
+  return (bundle: InsightBundle) => {
+    const item = findItem(bundle, id)
+    if (item?.asOf && /^\d{4}-\d{2}$/.test(item.asOf)) return item.asOf
+    return yearMonthKey(item?.period ?? '')
+  }
+}
+
+function patchItem(bundle: InsightBundle, item: InsightMetric): InsightBundle {
+  const cards = bundle.cards.map((card) => {
+    if (card.kind !== 'list') return card
+    const items = [...(card.items ?? [])]
+    const index = items.findIndex((row) => row.id === item.id)
+    if (index >= 0) items[index] = item
+    else items.push(item)
+    return { ...card, items }
+  })
+  return { ...bundle, updatedAt: taipeiStamp(), cards }
+}
+
+function withMarket(bundle: InsightBundle, patch: (card: InsightCard) => InsightCard): InsightBundle {
+  let found = false
+  const cards = bundle.cards.map((card) => {
+    if (card.id !== 'market') return card
+    found = true
+    return patch(card)
+  })
+  if (!found) {
+    cards.unshift(
+      patch({ ...metric({ id: 'market', title: '前一日大盤', source: 'TWSE FMTQIK' }), kind: 'market' }),
+    )
+  }
+  return { ...bundle, updatedAt: taipeiStamp(), cards }
+}
+
+function emptyBundle(): InsightBundle {
+  return {
+    updatedAt: '',
+    cards: [
+      { ...metric({ id: 'market', title: '前一日大盤', source: 'TWSE FMTQIK' }), kind: 'market' },
+      { ...metric({ id: 'macro_bundle', title: '景氣／運價／原物料', source: '' }), kind: 'list', items: [] },
+    ],
+    margin: { latest: null, label: MARGIN_LABEL, source: MARGIN_SOURCE },
+    overlay: [],
+    retail: { latest: null, date: '', points: [], source: '期交所' },
+    errors: [],
+    releases: {},
+  }
+}
+
+type Fresh = { asOf: string; apply: (bundle: InsightBundle) => InsightBundle }
+type Job = {
+  id: string
+  retryMs: number
+  tries: number
+  due: (now: number) => string
+  read: (bundle: InsightBundle, due: string) => string
+  pull: () => Promise<Fresh>
+}
+
+const HALF_HOUR = 30 * 60 * 1000
+const DAY = 24 * 60 * 60 * 1000
+
+function itemJob(
+  id: string,
+  due: (now: number) => string,
+  read: (bundle: InsightBundle, due: string) => string,
+  pull: () => Promise<InsightMetric>,
+  retryMs: number,
+  tries: number,
+): Job {
+  return {
+    id,
+    due,
+    read,
+    retryMs,
+    tries,
+    pull: async () => {
+      const item = await pull()
+      return { asOf: item.asOf ?? '', apply: (bundle) => patchItem(bundle, item) }
+    },
+  }
+}
+
+// 時間都是該市場公布後再等約 10 分鐘。抓到的日期還沒換新，就依 retry 再試，不會每分鐘打。
+const JOBS: Job[] = [
+  {
+    id: 'market',
+    retryMs: HALF_HOUR,
+    tries: 4,
+    due: (now) => latestClock('Asia/Taipei', '15:10', now),
+    read: (bundle) => marketAsOf(bundle),
+    pull: async () => {
+      const taiex = await fetchTaiexSeries()
+      const last = taiex[taiex.length - 1]
+      if (!last) throw new Error('沒有加權指數')
+      const prevClose = last.change != null ? last.close - last.change : null
+      const pct = last.change != null && prevClose ? (last.change / prevClose) * 100 : null
+      const next = {
+        ...metric({
+          id: 'market',
+          title: '前一日大盤',
+          source: 'TWSE FMTQIK',
+          value: fixed(last.close, 2),
+          period: dayLabel(last.date),
+          detail: `${signed(last.change, 2)} ${signed(pct, 2)}%`,
+          detailTone: toneOf(last.change),
+          status: (last.change ?? 0) > 0 ? '上漲' : (last.change ?? 0) < 0 ? '下跌' : '平盤',
+          tone: toneOf(last.change),
+        }),
+        kind: 'market' as const,
+        asOf: last.date,
+      }
+      return {
+        asOf: last.date,
+        apply: (bundle) => withMarket(bundle, (old) => ({ ...old, ...next, institutions: old.institutions, derivatives: old.derivatives })),
+      }
+    },
+  },
+  {
+    id: 'institutions',
+    retryMs: HALF_HOUR,
+    tries: 4,
+    due: (now) => latestClock('Asia/Taipei', '16:00', now),
+    read: (bundle, due) => {
+      const card = bundle.cards.find((row) => row.id === 'market')
+      if (card?.institutions?.date) return card.institutions.date
+      if (card?.institutions?.dateLabel && card.institutions.dateLabel === dayLabel(due)) return due
+      return ''
+    },
+    pull: async () => {
+      const data = await fetchInstitutions()
+      if (!data.date) throw new Error('三大法人沒有日期')
+      return { asOf: data.date, apply: (bundle) => withMarket(bundle, (old) => ({ ...old, institutions: data })) }
+    },
+  },
+  {
+    id: 'derivatives',
+    retryMs: HALF_HOUR,
+    tries: 4,
+    due: (now) => latestClock('Asia/Taipei', '16:00', now),
+    read: (bundle, due) => {
+      const card = bundle.cards.find((row) => row.id === 'market')
+      if (card?.derivatives?.date) return card.derivatives.date
+      if (card?.derivatives?.dateLabel && card.derivatives.dateLabel === dayLabel(due)) return due
+      return ''
+    },
+    pull: async () => {
+      const data = await fetchDerivatives()
+      if (!data.date) throw new Error('期貨部位沒有日期')
+      return { asOf: data.date, apply: (bundle) => withMarket(bundle, (old) => ({ ...old, derivatives: data })) }
+    },
+  },
+  {
+    id: 'margin',
+    retryMs: HALF_HOUR,
+    tries: 4,
+    due: (now) => latestClock('Asia/Taipei', '21:30', now),
+    read: (bundle, due) => {
+      if (bundle.margin.basis !== MARGIN_BASIS || bundle.overlay.length < 100) return ''
+      const date = bundle.margin.latest?.date ?? ''
+      if (!date || !bundle.overlay.some((row) => row.balance != null)) return ''
+      return date >= due ? date : ''
+    },
+    pull: async () => {
+      const [margin, taiex] = await Promise.all([fetchMargin(), fetchTaiexSeries(8)])
+      const asOf = margin.latest?.date ?? ''
+      if (!asOf) throw new Error('融資維持率沒有日期')
+      return {
+        asOf,
+        apply: (bundle) => ({
+          ...bundle,
+          updatedAt: taipeiStamp(),
+          margin: { latest: margin.latest, label: MARGIN_LABEL, source: MARGIN_SOURCE, basis: MARGIN_BASIS },
+          overlay: overlayOf(margin.series, taiex),
+          errors: bundle.errors.filter((line) => !line.startsWith('融資維持率')),
+        }),
+      }
+    },
+  },
+  itemJob('bdi', (now) => latestClock('Europe/London', '13:05', now), readDay('bdi'), async () => (await fetchCnbc()).bdi, HALF_HOUR, 4),
+  itemJob('gold', (now) => latestClock('Europe/London', '15:05', now), readDay('gold'), async () => (await fetchCnbc()).gold, HALF_HOUR, 4),
+  itemJob('brent', (now) => latestClock('Europe/London', '19:35', now), readDay('brent'), async () => (await fetchCnbc()).brent, HALF_HOUR, 4),
+  itemJob('bai', baiDue, readDay('bai'), fetchBai, 6 * 60 * 60 * 1000, 4),
+  itemJob('ism', (now) => usMonthlyDue(firstBusinessDay, '10:10', now), readMonth('ism'), fetchIsm, DAY, 6),
+  itemJob('sahm', (now) => usMonthlyDue((year, month) => firstWeekday(year, month, 5), '08:40', now), readMonth('sahm'), fetchSahm, DAY, 6),
+  itemJob('light', (now) => monthlyDataDue(27, '16:10', now), readMonth('light'), fetchLights, DAY, 8),
+  itemJob('export', (now) => monthlyDataDue(8, '16:10', now), readMonth('export'), fetchExports, DAY, 8),
+  {
+    id: 'retail',
+    retryMs: HALF_HOUR,
+    tries: 8,
+    due: (now) => latestClock('Asia/Taipei', '16:30', now),
+    read: (bundle, due) => (bundle.retail?.date && bundle.retail.date >= due ? bundle.retail.date : ''),
+    pull: async () => {
+      const fresh = await fetchRetail()
+      const latest = fresh.points[fresh.points.length - 1]?.ratio ?? null
+      return {
+        asOf: fresh.asOf,
+        apply: (bundle) => ({
+          ...bundle,
+          updatedAt: taipeiStamp(),
+          retail: { latest, date: fresh.asOf, points: fresh.points, source: '期交所' },
+          errors: bundle.errors.filter((line) => !line.startsWith('微台')),
+        }),
+      }
+    },
+  },
+]
+
+let bundleMemory: InsightBundle | null = null
+let sweeping = false
+const attempts = new Map<string, { key: string; n: number; next: number }>()
+
+async function loadBundle() {
+  if (!bundleMemory) bundleMemory = (await readJson<InsightBundle>(bundleFile)) ?? emptyBundle()
+  if (!bundleMemory.releases) bundleMemory.releases = {}
+  return bundleMemory
+}
+
+async function saveBundle(bundle: InsightBundle) {
+  bundleMemory = bundle
+  await writeJson(bundleFile, bundle)
+}
+
+function remember(bundle: InsightBundle, now = Date.now()) {
+  const releases = { ...bundle.releases }
+  for (const job of JOBS) {
+    const due = job.due(now)
+    const held = due ? job.read(bundle, due) : ''
+    if (due && held && held >= due) releases[job.id] = due
+  }
+  return { ...bundle, releases }
+}
+
+async function sweep() {
+  if (sweeping) return
+  sweeping = true
+  try {
+    let bundle = await loadBundle()
+    const now = Date.now()
+    let dirty = false
+    const releases = { ...bundle.releases }
+    for (const job of JOBS) {
+      const due = job.due(now)
+      if (!due) continue
+      const held = job.read(bundle, due)
+      if (held && held >= due) {
+        if (releases[job.id] !== due) {
+          releases[job.id] = due
+          dirty = true
+        }
+        continue
+      }
+      const state = attempts.get(job.id)
+      if (state?.key === due && (now < state.next || state.n >= job.tries)) continue
+      try {
+        const fresh = await job.pull()
+        if (fresh.asOf && (!held || fresh.asOf > held)) {
+          bundle = fresh.apply({ ...bundle, releases })
+          bundle = { ...bundle, releases, updatedAt: taipeiStamp() }
+          dirty = true
+        }
+        if (fresh.asOf && fresh.asOf >= due) {
+          releases[job.id] = due
+          bundle = { ...bundle, releases }
+          attempts.delete(job.id)
+          dirty = true
+        } else {
+          const n = (state?.key === due ? state.n : 0) + 1
+          attempts.set(job.id, { key: due, n, next: now + job.retryMs })
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        console.error(`[insight] ${job.id} ${reason}`)
+        const n = (state?.key === due ? state.n : 0) + 1
+        attempts.set(job.id, { key: due, n, next: now + job.retryMs })
+      }
+    }
+    if (dirty) await saveBundle({ ...bundle, releases })
+  } finally {
+    sweeping = false
+  }
 }
 
 export async function getInsightBundle(force: boolean) {
-  if (!bundleMemory) {
-    bundleMemory = await readJson<InsightBundle>(bundleFile)
-    if (bundleMemory) {
-      const saved = Date.parse(bundleMemory.updatedAt.replace(' ', 'T') + '+08:00')
-      bundleAt = Number.isFinite(saved) ? saved : 0
-    }
+  if (!force) return { bundle: await loadBundle(), fromCache: true }
+  while (sweeping) await new Promise((resolve) => setTimeout(resolve, 200))
+  sweeping = true
+  try {
+    const next = remember(await buildBundle(await loadBundle()))
+    await saveBundle(next)
+    return { bundle: next, fromCache: false }
+  } finally {
+    sweeping = false
   }
-  const stale = force || !bundleMemory || bundleStale(bundleMemory, bundleAt)
-  // 收盤後若還是昨天的大盤，一定要等這次抓完再回（不要先吐舊的讓頁面卡住）
-  const mustWait =
-    force ||
-    !bundleMemory ||
-    (() => {
-      const { date, hm, weekday } = taipeiParts()
-      if (weekday === 'Sat' || weekday === 'Sun' || hm < CLOSE_PUBLISH_HM) return false
-      const asOf = marketAsOf(bundleMemory)
-      return !asOf || asOf < date
-    })()
-  if (mustWait) return { bundle: await refreshBundle(), fromCache: false }
-  if (stale) void refreshBundle().catch(() => null)
-  return { bundle: bundleMemory!, fromCache: true }
 }
 
-/** 伺服器啟動後背景每 20 分鐘抓一次；部署重啟也會立刻跑一輪，不用等人開分析頁 */
+/** 每分鐘只看時鐘。某一項的公布時間到了、而且手上還是舊的，才去抓那一項 */
 export function startInsightRefresh() {
-  void refreshBundle().catch(() => null)
-  const timer = setInterval(() => void refreshBundle().catch(() => null), BUNDLE_TTL_MS)
+  void sweep()
+  const timer = setInterval(() => void sweep(), 60_000)
   timer.unref?.()
 }
 
@@ -802,9 +1391,9 @@ function rulesReport(bundle: InsightBundle, rows: InsightQuote[], note?: string)
   const keepDelta = overlay.length >= 2 ? overlay[overlay.length - 1].keepRate - overlay[overlay.length - 2].keepRate : null
   const risk: string[] = []
   if (keep == null) risk.push('融資維持率暫缺。')
-  else if (keep < 150) risk.push(`全市場擔保維持率 ${keep.toFixed(2)}% 偏低，追繳／處分壓力需提高警戒。`)
-  else if (keep < 170) risk.push(`全市場擔保維持率 ${keep.toFixed(2)}% 位於中性偏緊區間。`)
-  else risk.push(`全市場擔保維持率 ${keep.toFixed(2)}%，信用風險相對可控。`)
+  else if (keep < 150) risk.push(`大盤融資維持率 ${keep.toFixed(2)}% 偏低，追繳／處分壓力需提高警戒。`)
+  else if (keep < 170) risk.push(`大盤融資維持率 ${keep.toFixed(2)}% 位於中性偏緊區間。`)
+  else risk.push(`大盤融資維持率 ${keep.toFixed(2)}%，信用風險相對可控。`)
   if (keepDelta != null) risk.push(`較前一交易日${keepDelta < 0 ? '下降' : '上升'} ${Math.abs(keepDelta).toFixed(2)} 個百分點。`)
   const tone = market?.tone ?? 'flat'
   const [stance, stanceNote] =
@@ -847,6 +1436,7 @@ function rulesReport(bundle: InsightBundle, rows: InsightQuote[], note?: string)
   return {
     generatedAt: new Date().toISOString(),
     engine: 'rules',
+    symbols: rows.map((row) => row.quote.symbol),
     stance,
     marketSummary: stanceNote,
     stockIdeas,
@@ -917,6 +1507,7 @@ async function grokReport(bundle: InsightBundle, rows: InsightQuote[], key: stri
     generatedAt: new Date().toISOString(),
     engine: 'grok',
     model: MODEL,
+    symbols: base.symbols,
     stance: parsed.stance || base.stance,
     marketSummary: parsed.marketSummary || base.marketSummary,
     stockIdeas: ideas,
