@@ -536,14 +536,13 @@ export function WatchPage({ slots }: { slots: DeskSlots | null }) {
   const FLOW_PARENTS = ['電子', '電子工業', '化學生技醫療']
   const withFlow = (macro?.sectors ?? []).filter((row) => row.flow != null && !FLOW_PARENTS.includes(row.name))
   const score = (row: { flow: number | null; pct: number }) => (row.flow ?? 0) * row.pct
-  const inflow = withFlow
-    .filter((row) => row.pct > 0)
-    .sort((a, b) => score(b) - score(a))
-    .slice(0, 5)
-  const outflow = withFlow
-    .filter((row) => row.pct < 0)
-    .sort((a, b) => score(a) - score(b))
-    .slice(0, 5)
+  // 依成交占比×漲跌幅；若全日無上漲類股，流入改列分數最高的相對強勢，避免整欄空白
+  const rankedUp = [...withFlow].sort((a, b) => score(b) - score(a))
+  const rankedDown = [...withFlow].sort((a, b) => score(a) - score(b))
+  const upOnly = rankedUp.filter((row) => row.pct > 0).slice(0, 5)
+  const downOnly = rankedDown.filter((row) => row.pct < 0).slice(0, 5)
+  const inflow = upOnly.length ? upOnly : rankedUp.slice(0, 5)
+  const outflow = downOnly.length ? downOnly : rankedDown.slice(0, 5)
   const flowDay =
     (macro?.index.date && macro.index.date.length === 8
       ? `${Number(macro.index.date.slice(4, 6))}月${Number(macro.index.date.slice(6))}日`

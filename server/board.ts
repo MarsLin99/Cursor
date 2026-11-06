@@ -211,7 +211,7 @@ async function fetchIndexAndSectors() {
   }
 }
 
-const FLOW_ALIAS: Record<string, string> = { 化學: '化工', 航運: '航運業' }
+const FLOW_ALIAS: Record<string, string> = { 化學: '化工', 航運: '航運業', 電子工業: '電子' }
 
 function flowRate(name: string, rates: Map<string, number>) {
   if (rates.has(name)) return rates.get(name) ?? null
@@ -221,6 +221,8 @@ function flowRate(name: string, rates: Map<string, number>) {
 }
 
 let flowUpdated = ''
+
+let lastFlowRates = new Map<string, number>()
 
 async function fetchFlowRates() {
   const res = await fetch('https://www.moneydj.com/Z/ZB/ZBA/ZBA.djhtm', {
@@ -247,7 +249,8 @@ async function fetchFlowRates() {
     if (!name || name.includes('%') || name === '類股名稱' || name === '流向率') continue
     rates.set(name, Number(body[i].replace('%', '')))
   }
-  return rates
+  if (rates.size) lastFlowRates = rates
+  return rates.size ? rates : lastFlowRates
 }
 
 let sectorRefreshing = false
@@ -711,8 +714,9 @@ export async function scanMacro() {
       ...base,
       scannedAt: new Date().toISOString(),
       scanning: false,
-      index: indexPack?.index ?? base.index,
-      sectors: indexPack?.sectors ?? base.sectors,
+      // 盤中類股改由 refreshSectors（MIS）維護；scanMacro 的 MI_INDEX 是前一交易日收盤，不可蓋掉即時流向
+      index: twSession() ? base.index : indexPack?.index ?? base.index,
+      sectors: twSession() ? base.sectors : indexPack?.sectors ?? base.sectors,
       institutions: institutions ?? base.institutions,
       gold,
       brent,
@@ -895,13 +899,15 @@ function overlaySpark(rows: QuoteRow[], live: Record<string, SparkBook>) {
   return rows.map((row) => {
     const book = liveBook(live, row.symbol)
     if (!book || book.price == null) return row
-    const prev = book.prev ?? row.prev
+    // 昨收／開盤：證交所 MIS 優先（台新 bridge 隔夜可能殘留舊值）
+    const prev = row.prev ?? book.prev
+    const open = row.open ?? book.open
     const change = prev != null ? book.price - prev : row.change
     return {
       ...row,
       name: book.name || row.name,
       price: book.price,
-      open: book.open ?? row.open,
+      open,
       high: book.high ?? row.high,
       low: book.low ?? row.low,
       prev,
@@ -920,8 +926,8 @@ async function fetchQuotesPreferTaishin(
   items: { symbol: string; market: 'twse' | 'tpex' }[],
 ) {
   const live = await readSparkLive()
-  const missing = items.filter((item) => liveBook(live, item.symbol)?.price == null)
-  const mis = missing.length ? await fetchQuotes(missing).catch(() => [] as QuoteRow[]) : []
+  // 一律打 MIS 拿官方昨收／開盤／漲跌；缺價的代號才靠 MIS 價，有台新價的用 overlay 覆寫現價
+  const mis = items.length ? await fetchQuotes(items).catch(() => [] as QuoteRow[]) : []
   const bySymbol = new Map(mis.map((row) => [row.symbol, row]))
   const blank = (item: { symbol: string; market: 'twse' | 'tpex' }): QuoteRow => ({
     symbol: item.symbol,
@@ -1257,20 +1263,49 @@ function dayReference(
   const old = dayReferences.get(symbol)
   const ref: DayReference =
     old && old.date === date ? { ...old } : { date, prev: null, limitUp: null, limitDown: null, official: false, open: null }
-  if (ref.prev == null && seen.prev != null && seen.prev > 0) ref.prev = seen.prev
+  // 換日或尚未鎖定：寫入昨收。若之後拿到與官方漲跌停吻合的更好昨收，允許修正（避免隔夜鎖到舊參考價）
+  if (seen.prev != null && seen.prev > 0) {
+    if (ref.prev == null) ref.prev = seen.prev
+    else if (
+      ref.prev !== seen.prev &&
+      officialBand(seen.prev, seen.limitUp, seen.limitDown) &&
+      (!ref.official || !officialBand(ref.prev, ref.limitUp, ref.limitDown) || Math.abs(ref.prev - seen.prev) / seen.prev > 0.001)
+    ) {
+      ref.prev = seen.prev
+      ref.official = false
+      ref.limitUp = null
+      ref.limitDown = null
+    }
+  }
   if (!ref.official) {
     if (officialBand(ref.prev, seen.limitUp, seen.limitDown)) {
-      // 台新／鉅亨給的官方漲跌停（含槓桿 ETF 的特殊幅度）
       ref.limitUp = seen.limitUp
       ref.limitDown = seen.limitDown
       ref.official = true
     } else if (ref.prev != null && ref.limitUp == null) {
-      // 暫時沒有官方值：昨收 ±10% 依升降單位進位，拿到官方值再換一次
       ref.limitUp = roundToTick(ref.prev * 1.1, 1)
       ref.limitDown = roundToTick(ref.prev * 0.9, -1)
     }
+  } else if (
+    seen.limitUp != null &&
+    seen.limitDown != null &&
+    officialBand(ref.prev, seen.limitUp, seen.limitDown) &&
+    (ref.limitUp !== seen.limitUp || ref.limitDown !== seen.limitDown)
+  ) {
+    ref.limitUp = seen.limitUp
+    ref.limitDown = seen.limitDown
   }
-  if (ref.open == null && seen.open != null && seen.open > 0) ref.open = seen.open
+  if (seen.open != null && seen.open > 0) {
+    if (ref.open == null) ref.open = seen.open
+    else if (
+      ref.open !== seen.open &&
+      seen.prev != null &&
+      Math.abs(seen.open - seen.prev) > Math.abs(ref.open - seen.prev)
+    ) {
+      // 舊 open 貼近昨收、新 open 才是真正開盤（常見於隔夜殘留昨日開盤）
+      ref.open = seen.open
+    }
+  }
   if (date) dayReferences.set(symbol, ref)
   return ref
 }
@@ -1356,11 +1391,13 @@ function buildSpark(
   const q = ext?.quote ?? null
   const meta = useLive ? live : undefined
   const lastPoint = points.at(-1)
+  // 參考價／漲跌停：鉅亨（證交所同源）優先；台新 bridge 隔夜可能鎖到舊昨收／舊開盤
+  const openFromBars = extBars[0] && extBars[0].m <= SPARK_OPEN + 5 ? extBars[0].o : null
   const ref = dayReference(symbol, sessionDate, {
-    prev: meta?.prev ?? q?.prev ?? null,
-    limitUp: meta?.limitUp ?? q?.limitUp ?? null,
-    limitDown: meta?.limitDown ?? q?.limitDown ?? null,
-    open: meta?.open ?? (extBars[0] && extBars[0].m <= SPARK_OPEN + 5 ? extBars[0].o : null) ?? livePoints[0]?.p ?? null,
+    prev: q?.prev ?? meta?.prev ?? null,
+    limitUp: q?.limitUp ?? meta?.limitUp ?? null,
+    limitDown: q?.limitDown ?? meta?.limitDown ?? null,
+    open: openFromBars ?? meta?.open ?? livePoints[0]?.p ?? null,
   })
   return {
     symbol,

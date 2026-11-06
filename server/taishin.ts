@@ -184,13 +184,15 @@ async function bootstrap(symbol: string) {
     rest<TickerJson>(`/intraday/ticker/${encodeURIComponent(symbol)}`),
     rest<QuoteJson>(`/intraday/quote/${encodeURIComponent(symbol)}`),
   ])
+  ensureFeedDate()
   if (ticker?.name) book.name = ticker.name
   if (quote?.name) book.name = quote.name
-  book.prev = ticker?.previousClose ?? quote?.previousClose ?? book.prev
-  book.limitUp = ticker?.limitUpPrice ?? book.limitUp
-  book.limitDown = ticker?.limitDownPrice ?? book.limitDown
+  const prev = ticker?.referencePrice ?? quote?.referencePrice ?? ticker?.previousClose ?? quote?.previousClose ?? null
+  if (prev != null && prev > 0) book.prev = prev
+  if (ticker?.limitUpPrice != null) book.limitUp = ticker.limitUpPrice
+  if (ticker?.limitDownPrice != null) book.limitDown = ticker.limitDownPrice
   if (quote) {
-    book.open = quote.openPrice ?? book.open
+    if (quote.openPrice != null && quote.openPrice > 0) book.open = quote.openPrice
     book.high = quote.highPrice ?? book.high
     book.low = quote.lowPrice ?? book.low
     book.price = quote.lastPrice ?? quote.closePrice ?? book.price
@@ -290,12 +292,26 @@ function subscribeAll(symbols: string[]) {
   }
 }
 
+let feedDate = ''
+
+function ensureFeedDate() {
+  const today = taipeiDate()
+  if (feedDate && feedDate !== today) {
+    books.clear()
+    subscribed.clear()
+    dirty = true
+  }
+  feedDate = today
+  return today
+}
+
 async function flush(connected: boolean) {
   if (!dirty && connected === (await currentConnected())) {
     /* 仍寫心跳，讓燈號依 updatedAt／檔案時間判斷 */
   }
+  const today = ensureFeedDate()
   const payload: LiveFile = {
-    date: taipeiDate(),
+    date: today,
     connected,
     updatedAt: new Date().toISOString(),
     symbols: Object.fromEntries(books),
