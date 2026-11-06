@@ -263,10 +263,15 @@ const SECTOR_CODES = [
   't22', 't23', 't24', 't25', 't26', 't27', 't28', 't29', 't30', 't31',
 ]
 
-async function fetchMisSectors() {
+async function fetchMisSectors(): Promise<{
+  date: string
+  time: string
+  sectors: CacheShape['sectors']
+  index: CacheShape['index'] | null
+}> {
   const url =
     'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=' +
-    SECTOR_CODES.map((code) => `tse_${code}.tw`).join('|') +
+    ['t00', ...SECTOR_CODES].map((code) => `tse_${code}.tw`).join('|') +
     `&json=1&delay=0&_=${Date.now()}`
   const res = await fetch(url, {
     cache: 'no-store',
@@ -277,13 +282,28 @@ async function fetchMisSectors() {
   const json = (await res.json()) as { msgArray?: Record<string, string>[] }
   let date = ''
   let time = ''
+  let index: CacheShape['index'] | null = null
   const sectors = (json.msgArray ?? []).flatMap((row) => {
-    const name = String(row.n ?? '').replace(/類指數$/, '').trim()
+    const code = String(row.c ?? '')
     const price = row.z && row.z !== '-' ? num(row.z) : null
     const prev = row.y ? num(row.y) : null
-    if (!name || price == null || !prev) return []
     if ((row.d ?? '') > date) date = row.d ?? ''
     if ((row.t ?? '') > time) time = row.t ?? ''
+    if (code === 't00') {
+      if (price != null && prev != null && prev > 0) {
+        const change = price - prev
+        index = {
+          price,
+          change,
+          pct: Math.round((change / prev) * 10000) / 100,
+          date: row.d ?? date,
+          time: row.t || time,
+        }
+      }
+      return []
+    }
+    const name = String(row.n ?? '').replace(/類指數$/, '').trim()
+    if (!name || price == null || !prev) return []
     return [
       {
         name,
@@ -293,7 +313,7 @@ async function fetchMisSectors() {
       },
     ]
   })
-  return { date, time, sectors }
+  return { date, time, sectors, index }
 }
 
 function twSession(now = new Date()) {
@@ -318,13 +338,17 @@ async function refreshSectors() {
     }
     if (!pack.sectors.length) return
     const base = memory ?? (await readJson<CacheShape>(macroFile)) ?? emptySnapshot()
+    const liveIndex = live?.index
     memory = {
       ...base,
       sectors: pack.sectors,
       sectorsAt: new Date().toISOString(),
       sectorsTime: pack.time,
       flowUpdated,
-      index: { ...base.index, date: pack.date || base.index.date },
+      // 盤中加權指數跟 MIS t00 走；只改 date 會讓標題旁跌點／跌幅整日卡在昨收
+      index: liveIndex?.price != null
+        ? liveIndex
+        : { ...base.index, date: pack.date || base.index.date },
     }
     await writeJson(macroFile, memory)
     flowAt = Date.now()
@@ -786,11 +810,15 @@ export async function fetchQuotes(
 ) {
   if (!items.length) return [] as QuoteRow[]
   const joined = items.map((item) => quoteChannel(item.symbol, item.market)).join('|')
-  const json = JSON.parse(
-    await getText(
-      `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(joined)}&json=1&delay=0`,
-    ),
-  ) as { msgArray?: Record<string, string>[] }
+  const misUrl =
+    `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${joined}&json=1&delay=0&_=${Date.now()}`
+  const misRes = await fetch(misUrl, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(10000),
+    headers: { 'User-Agent': UA, Referer: 'https://mis.twse.com.tw/stock/index.jsp' },
+  })
+  if (!misRes.ok) throw new Error(`${misRes.status} mis quotes`)
+  const json = (await misRes.json()) as { msgArray?: Record<string, string>[] }
   const byCode = new Map((json.msgArray ?? []).map((row) => [row.c, row]))
   return items.map((item) => {
     const row = byCode.get(item.symbol)
@@ -964,8 +992,63 @@ async function fetchQuotesPreferTaishin(
     prev: null,
     time: '',
   })
-  const base = items.map((item) => bySymbol.get(item.symbol) ?? blank(item))
-  return overlaySpark(base, live)
+  let base = items.map((item) => bySymbol.get(item.symbol) ?? blank(item))
+  base = overlaySpark(base, live)
+  // 台新 bridge 不訂閱加權指數；MIS 偶發斷線時用 Yahoo ^TWII，標題旁跌點才會動
+  if (base.some((row) => row.symbol === 't00' && row.price == null)) {
+    const twii = await fetchYahooTwii().catch(() => null)
+    if (twii) {
+      base = base.map((row) => (row.symbol === 't00' ? { ...row, ...twii, symbol: 't00', market: row.market } : row))
+    }
+  }
+  return base
+}
+
+async function fetchYahooTwii(): Promise<Partial<QuoteRow> | null> {
+  const json = JSON.parse(
+    await getText('https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII?interval=1m&range=1d'),
+  ) as {
+    chart?: {
+      result?: {
+        meta?: {
+          regularMarketPrice?: number
+          chartPreviousClose?: number
+          previousClose?: number
+          regularMarketTime?: number
+        }
+      }[]
+    }
+  }
+  const meta = json.chart?.result?.[0]?.meta
+  const price = meta?.regularMarketPrice
+  const prev = meta?.chartPreviousClose ?? meta?.previousClose
+  if (price == null || prev == null || prev <= 0) return null
+  const change = price - prev
+  const at = meta?.regularMarketTime
+  const time =
+    at != null
+      ? new Date(at * 1000).toLocaleTimeString('en-GB', {
+          timeZone: 'Asia/Taipei',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hourCycle: 'h23',
+        })
+      : ''
+  return {
+    name: '發行量加權股價指數',
+    price,
+    prev,
+    change,
+    pct: (change / prev) * 100,
+    open: null,
+    high: null,
+    low: null,
+    bid: null,
+    ask: null,
+    volume: null,
+    time,
+  }
 }
 
 async function fetchIntradaySuffix(symbol: string, suffix: 'TW' | 'TWO') {
