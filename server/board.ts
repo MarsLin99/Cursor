@@ -11,7 +11,7 @@ import type {
   TickerItem,
   WinPick,
 } from '../src/desk/types.ts'
-import { getInsightBundle, makeInsightReport, maybeRefreshInsightReport, readInsightReport, startInsightRefresh } from './insight.ts'
+import { getInsightBundle, makeInsightReport, startInsightRefresh } from './insight.ts'
 import { startTaishinFeed, taishinConnectedNow } from './taishin.ts'
 import { noteFlowSymbols, pollYahooNow, startFlowSampler, yahooFlow } from './flowSampler.ts'
 import { yahooForceSeries } from './yahooForce.ts'
@@ -77,7 +77,7 @@ function emptySnapshot(): CacheShape {
     brent: null,
     indexHistory: [],
     news: [],
-    blanks: ['景氣燈號', '出口年增率', 'BDI', 'BAI', 'ISM 製造業', '薩姆規則', '全市場擔保維持率'],
+    blanks: ['景氣燈號', '出口年增率', 'BDI', 'BAI', 'ISM 製造業', '薩姆規則', '大盤融資維持率'],
   }
 }
 
@@ -509,6 +509,22 @@ async function translateZhTw(text: string) {
   return json[0].map((part) => part[0]).join('').trim()
 }
 
+function trumpLead(title: string) {
+  const text = title.replace(/\s+/g, ' ').trim()
+  const sentence = text.split(/(?<=[.!?])\s/)[0] ?? text
+  if (sentence.length <= 80) return sentence
+  const cut = text.slice(0, 72)
+  return cut.replace(/\s+\S*$/, '') || cut
+}
+
+function shortTrump(title: string) {
+  const clean = title.replace(/\s+/g, ' ').trim()
+  if (clean.length <= 33) return clean
+  const sentence = clean.split(/[。！？!?]/)[0] ?? clean
+  const lead = (sentence.length <= 32 ? sentence : clean.slice(0, 32)).replace(/[，、,…\s]+$/g, '')
+  return `${lead}…`
+}
+
 let trumpCache: { at: number; items: TickerItem[] } | null = null
 
 async function trumpTicker() {
@@ -529,21 +545,23 @@ async function trumpTicker() {
     const title = plainTitle(pick('title'))
     const pub = pick('pubDate')
     if (!link || !title || /^image post/i.test(title) || title.length < 16) continue
-    let zh = zhMemory[link]
+    const lead = trumpLead(title)
+    const cacheKey = `lead:${link}`
+    let zh = zhMemory[cacheKey]
     if (zh?.includes('特朗普')) {
       zh = zh.replaceAll('特朗普', '川普')
-      zhMemory[link] = zh
+      zhMemory[cacheKey] = zh
       dirty = true
     }
     if (!zh) {
       try {
-        zh = await translateZhTw(title)
+        zh = await translateZhTw(lead)
       } catch {
         zh = ''
       }
       if (zh) {
         zh = zh.replaceAll('特朗普', '川普')
-        zhMemory[link] = zh
+        zhMemory[cacheKey] = zh
         dirty = true
       }
     }
@@ -553,7 +571,7 @@ async function trumpTicker() {
       tag: '川普',
       kind: 'trump',
       time: Number.isFinite(at) ? hhmm(at) : '',
-      title: zh,
+      title: shortTrump(lead.length < title.trim().length ? `${zh}…` : zh),
       url: link,
       at: Number.isFinite(at) ? at : 0,
     })
@@ -613,7 +631,9 @@ async function stockTicker(symbol: string, name: string, market: 'twse' | 'tpex'
   }
   let rows = (await yahooStockPage(symbol, suffix)).filter((item) => matches(item.title))
   if (!rows.length) rows = (await yahooStockPage(symbol, other)).filter((item) => matches(item.title))
+  const today = taipeiDate()
   const items = rows
+    .filter((item) => item.at > 0 && taipeiDate(new Date(item.at)) === today)
     .sort((a, b) => b.at - a.at)
     .slice(0, 2)
     .map((item) => ({ ...item, tag, symbol }))
@@ -1728,9 +1748,16 @@ export function attachBoard(middlewares: {
           maybeRefreshTicker()
         }
         const visible = new Set(stocks.map((stock) => stock.symbol))
-        const items = (tickerMemory?.items ?? []).filter(
-          (item) => item.kind !== 'stock' || (item.symbol != null && visible.has(item.symbol)),
-        )
+        const today = taipeiDate()
+        const items = (tickerMemory?.items ?? []).flatMap((item) => {
+          if (item.kind === 'stock') {
+            if (!item.symbol || !visible.has(item.symbol)) return []
+            if (!item.at || taipeiDate(new Date(item.at)) !== today) return []
+            return [item]
+          }
+          if (item.kind === 'trump') return [{ ...item, title: shortTrump(item.title) }]
+          return [item]
+        })
         send(res, 200, items)
         return
       }
@@ -1746,11 +1773,11 @@ export function attachBoard(middlewares: {
       }
       if (url.pathname === '/api/board/insight' && req.method === 'GET') {
         const { bundle, fromCache } = await getInsightBundle(url.searchParams.get('force') === '1')
-        const report = (await maybeRefreshInsightReport([]).catch(() => null)) ?? (await readInsightReport())
+        // 操作建議跟本機報價列表綁定，不把伺服器上別人／別台產生的報告塞給新電腦
         send(res, 200, {
           ...bundle,
           fromCache,
-          report,
+          report: null,
           llm: { configured: Boolean(await loadKey()) },
         })
         return

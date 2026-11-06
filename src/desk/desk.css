@@ -1174,13 +1174,13 @@
   top: 5.3px;
   transform: translateX(-50%);
   display: flex;
+  flex-wrap: wrap;
   gap: 10.6px;
   padding: 5.3px 10.6px;
   border: 1.3px solid var(--line);
   border-radius: 10.6px;
   background: rgba(255, 252, 245, 0.95);
   font-size: 15.8px;
-  white-space: nowrap;
   pointer-events: none;
   font-variant-numeric: tabular-nums;
 }
@@ -1188,6 +1188,7 @@
 .chart-legend .leg { display: inline-flex; align-items: center; gap: 7.9px; }
 .chart-legend i { display: inline-block; width: 21.1px; height: 4px; border-radius: 2.6px; }
 .chart-legend i.dash { height: 0; background: none !important; border-top: 2.6px dashed; }
+.retail-panel .chart-frame { position: relative; height: 300px; min-height: 300px; overflow: hidden; }
 .report-panel .report-actions { flex: 0 0 auto; }
 .report-cards { margin-bottom: 18.5px; }
 .stance-banner {

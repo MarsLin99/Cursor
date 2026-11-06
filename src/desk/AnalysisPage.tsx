@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { DeskSlots } from './DeskApp'
-import type { InsightBundle, InsightCard, InsightMetric, InsightReport, OverlayPoint } from './types'
+import type { InsightBundle, InsightCard, InsightMetric, InsightReport, OverlayPoint, RetailPoint } from './types'
 
 type InsightPayload = InsightBundle & {
   fromCache?: boolean
@@ -11,8 +11,50 @@ type InsightPayload = InsightBundle & {
 }
 
 const WATCH_KEY = 'desk-watchlist-v2'
+const REPORT_KEY = 'desk-insight-report-v1'
 const KEEP_COLOR = '#b8893d'
+
+function watchCodes() {
+  try {
+    const saved = localStorage.getItem(WATCH_KEY)
+    const items = saved ? (JSON.parse(saved) as { symbol: string }[]) : []
+    return items.map((item) => item.symbol).filter(Boolean)
+  } catch {
+    return [] as string[]
+  }
+}
+
+function sameCodes(a: string[] = [], b: string[] = []) {
+  if (a.length !== b.length) return false
+  const left = [...a].sort()
+  const right = [...b].sort()
+  return left.every((code, i) => code === right[i])
+}
+
+function readLocalReport(codes: string[]) {
+  if (!codes.length) return null
+  try {
+    const saved = localStorage.getItem(REPORT_KEY)
+    if (!saved) return null
+    const report = JSON.parse(saved) as InsightReport
+    const symbols = report.symbols ?? report.stockIdeas.map((idea) => idea.code)
+    return sameCodes(symbols, codes) ? report : null
+  } catch {
+    return null
+  }
+}
+
+function writeLocalReport(report: InsightReport | null) {
+  if (!report) {
+    localStorage.removeItem(REPORT_KEY)
+    return
+  }
+  localStorage.setItem(REPORT_KEY, JSON.stringify(report))
+}
+const BALANCE_COLOR = '#3f6f9f'
 const TAIEX_COLOR = '#1f7a6c'
+const LONG_COLOR = '#c45c4a'
+const SHORT_COLOR = '#1f7a6c'
 
 function group(value: number, digits = 0) {
   return value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
@@ -142,6 +184,7 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
   const plotW = w - PAD.left - PAD.right
   const plotH = h - PAD.top - PAD.bottom
   const keeps = points.map((point) => point.keepRate)
+  const balances = points.flatMap((point) => (point.balance == null ? [] : [point.balance]))
   const taiex = points.flatMap((point) => (point.taiex == null ? [] : [point.taiex]))
   const range = (values: number[]) => {
     const lo = Math.min(...values)
@@ -150,11 +193,18 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
     return [lo - pad, hi + pad] as const
   }
   const [kLo, kHi] = range(keeps)
+  const [bLo, bHi] = balances.length ? range(balances) : [0, 1]
   const [tLo, tHi] = taiex.length ? range(taiex) : [0, 1]
   const x = (i: number) => PAD.left + (i / (points.length - 1)) * plotW
   const yK = (v: number) => PAD.top + ((kHi - v) / (kHi - kLo)) * plotH
+  const yB = (v: number) => PAD.top + ((bHi - v) / (bHi - bLo)) * plotH
   const yT = (v: number) => PAD.top + ((tHi - v) / (tHi - tLo)) * plotH
   const keepPath = points.map((point, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${yK(point.keepRate).toFixed(1)}`).join('')
+  let balancePath = ''
+  points.forEach((point, i) => {
+    if (point.balance == null) return
+    balancePath += `${balancePath ? 'L' : 'M'}${x(i).toFixed(1)},${yB(point.balance).toFixed(1)}`
+  })
   let taiexPath = ''
   points.forEach((point, i) => {
     if (point.taiex == null) return
@@ -181,7 +231,7 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
         width={w}
         height={h}
         role="img"
-        aria-label="全市場擔保維持率與加權指數"
+        aria-label="大盤融資維持率、融資餘額與加權指數"
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
@@ -207,6 +257,7 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
           </text>
         ))}
         {taiexPath ? <path d={taiexPath} fill="none" stroke={TAIEX_COLOR} strokeWidth={2.4 * SCALE} strokeDasharray={`${7 * SCALE} ${5 * SCALE}`} /> : null}
+        {balancePath ? <path d={balancePath} fill="none" stroke={BALANCE_COLOR} strokeWidth={2.4 * SCALE} strokeLinejoin="round" /> : null}
         <path d={keepPath} fill="none" stroke={KEEP_COLOR} strokeWidth={2.6 * SCALE} strokeLinejoin="round" />
         <text x={x(points.length - 1) - 4 * SCALE} y={yK(last.keepRate) - 8 * SCALE} textAnchor="end" className="ov-last" fill={KEEP_COLOR}>
           {last.keepRate.toFixed(2)}%
@@ -220,6 +271,7 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
           <g>
             <line x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={h - PAD.bottom} className="ov-hover" />
             <circle cx={x(hover)} cy={yK(tip.keepRate)} r={3.5 * SCALE} fill={KEEP_COLOR} />
+            {tip.balance != null ? <circle cx={x(hover)} cy={yB(tip.balance)} r={3.5 * SCALE} fill={BALANCE_COLOR} /> : null}
             {tip.taiex != null ? <circle cx={x(hover)} cy={yT(tip.taiex)} r={3.5 * SCALE} fill={TAIEX_COLOR} /> : null}
           </g>
         ) : null}
@@ -227,8 +279,103 @@ function OverlayChart({ points }: { points: OverlayPoint[] }) {
       {tip && hover != null ? (
         <div className="ov-tip" style={{ left: `${(x(hover) / w) * 100}%` }}>
           <b>{tip.date}</b>
-          <span style={{ color: KEEP_COLOR }}>維持率 {tip.keepRate.toFixed(2)}%</span>
+          <span style={{ color: KEEP_COLOR }}>融資維持率 {tip.keepRate.toFixed(2)}%</span>
+          <span style={{ color: BALANCE_COLOR }}>融資餘額 {tip.balance != null ? `${group(tip.balance, 0)}億` : '—'}</span>
           <span style={{ color: TAIEX_COLOR }}>加權 {tip.taiex != null ? group(tip.taiex, 2) : '—'}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function RetailChart({ points }: { points: RetailPoint[] }) {
+  const frame = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 980, h: 280 })
+  const [hover, setHover] = useState<number | null>(null)
+
+  useLayoutEffect(() => {
+    const node = frame.current
+    if (!node) return
+    const measure = () => {
+      const rect = node.getBoundingClientRect()
+      setSize({ w: Math.max(320, Math.round(rect.width)), h: Math.max(180, Math.round(rect.height)) })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  if (points.length < 2) {
+    return (
+      <div ref={frame} className="chart-frame">
+        <p className="hint">微台散戶多空比讀取中…</p>
+      </div>
+    )
+  }
+  const { w, h } = size
+  const plotW = w - PAD.left - PAD.right
+  const plotH = h - PAD.top - PAD.bottom
+  const values = points.map((point) => point.ratio)
+  const lo = Math.min(...values)
+  const hi = Math.max(...values)
+  const pad = (hi - lo || 1) * 0.12
+  const yLo = lo - pad
+  const yHi = hi + pad
+  const x = (i: number) => PAD.left + (i / (points.length - 1)) * plotW
+  const y = (v: number) => PAD.top + ((yHi - v) / (yHi - yLo)) * plotH
+  const runs: { color: string; d: string }[] = []
+  points.forEach((point, i) => {
+    const color = point.ratio >= 0 ? LONG_COLOR : SHORT_COLOR
+    const cmd = `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(point.ratio).toFixed(1)}`
+    const prev = runs[runs.length - 1]
+    if (i > 0 && prev && prev.color === color) prev.d += cmd
+    else runs.push({ color, d: i ? `${`M${x(i - 1).toFixed(1)},${y(points[i - 1].ratio).toFixed(1)}`}${cmd}` : cmd })
+  })
+  const zero = yLo < 0 && yHi > 0 ? y(0) : null
+  const ticks = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])]
+  const onMove = (event: MouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const px = ((event.clientX - rect.left) / rect.width) * w
+    const i = Math.round(((px - PAD.left) / plotW) * (points.length - 1))
+    setHover(i >= 0 && i < points.length ? i : null)
+  }
+  const tip = hover != null ? points[hover] : null
+
+  return (
+    <div ref={frame} className="chart-frame">
+      <svg className="overlay-chart" viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" aria-label="微台散戶多空比" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        {[0, 1, 2, 3].map((g) => {
+          const gy = PAD.top + (g / 3) * plotH
+          return (
+            <g key={g}>
+              <line x1={PAD.left} x2={w - PAD.right} y1={gy} y2={gy} className="ov-grid" />
+              <text x={PAD.left - 6 * SCALE} y={gy + 4 * SCALE} textAnchor="end" className="ov-axis">
+                {(yHi - (g / 3) * (yHi - yLo)).toFixed(0)}%
+              </text>
+            </g>
+          )
+        })}
+        {zero != null ? <line x1={PAD.left} x2={w - PAD.right} y1={zero} y2={zero} stroke="rgba(15,61,62,0.28)" strokeWidth={1.2} /> : null}
+        {ticks.map((i) => (
+          <text key={i} x={x(i)} y={h - PAD.bottom + 18 * SCALE} textAnchor={i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'} className="ov-axis">
+            {points[i].date.slice(5)}
+          </text>
+        ))}
+        {runs.map((run, i) => (
+          <path key={i} d={run.d} fill="none" stroke={run.color} strokeWidth={2.4 * SCALE} strokeLinejoin="round" />
+        ))}
+        {tip && hover != null ? (
+          <g>
+            <line x1={x(hover)} x2={x(hover)} y1={PAD.top} y2={h - PAD.bottom} className="ov-hover" />
+            <circle cx={x(hover)} cy={y(tip.ratio)} r={3.5 * SCALE} fill={tip.ratio >= 0 ? LONG_COLOR : SHORT_COLOR} />
+          </g>
+        ) : null}
+      </svg>
+      {tip && hover != null ? (
+        <div className="ov-tip" style={{ left: `${(x(hover) / w) * 100}%` }}>
+          <b>{tip.date}</b>
+          <span style={{ color: tip.ratio >= 0 ? LONG_COLOR : SHORT_COLOR }}>{plus(tip.ratio, 1)}%</span>
         </div>
       ) : null}
     </div>
@@ -287,38 +434,25 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
   const load = async (force = false) => {
     const res = await fetch(`/api/board/insight${force ? '?force=1' : ''}`)
     if (!res.ok) throw new Error('讀不到分析資料')
-    setData((await res.json()) as InsightPayload)
+    const body = (await res.json()) as InsightPayload
+    const codes = watchCodes()
+    setData({ ...body, report: readLocalReport(codes) })
   }
 
   useEffect(() => {
-    const boot = async () => {
-      await load()
-      // 平日 15:05 後若大盤還不是今天，強制重抓一次（避開只吃到部署前的舊快取）
-      const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Taipei',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        weekday: 'short',
-      }).formatToParts(new Date())
-      const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
-      const hour = get('hour') === '24' ? '00' : get('hour')
-      const hm = `${hour}:${get('minute')}`
-      const weekday = get('weekday')
-      const today = `${Number(get('month'))}月${Number(get('day'))}日`
-      if (weekday !== 'Sat' && weekday !== 'Sun' && hm >= '15:05') {
-        const market = (await (await fetch('/api/board/insight')).json()) as InsightPayload
-        const card = market.cards?.find((row) => row.id === 'market')
-        if (!card?.period || card.period !== today) await load(true)
-        else setData(market)
+    void load().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '讀取失敗'))
+    // 只重讀伺服器已經排程抓好的快取，不再定時逼來源重抓
+    const timer = window.setInterval(() => void load().catch(() => null), 15 * 60_000)
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === WATCH_KEY || event.key === REPORT_KEY) {
+        setData((prev) => (prev ? { ...prev, report: readLocalReport(watchCodes()) } : prev))
       }
     }
-    void boot().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : '讀取失敗'))
-    const timer = window.setInterval(() => void load().catch(() => null), 5 * 60_000)
-    return () => window.clearInterval(timer)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('storage', onStorage)
+    }
   }, [])
 
   const refresh = async () => {
@@ -339,6 +473,12 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
     try {
       const saved = localStorage.getItem(WATCH_KEY)
       const items = saved ? (JSON.parse(saved) as { symbol: string; market: 'twse' | 'tpex' }[]) : []
+      if (!items.length) {
+        writeLocalReport(null)
+        setData((prev) => (prev ? { ...prev, report: null } : prev))
+        setError('報價列表是空的，先到看盤分頁加入持股再產生報告。')
+        return
+      }
       const res = await fetch('/api/board/insight/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -346,7 +486,9 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
       })
       const body = (await res.json()) as InsightReport & { error?: string }
       if (!res.ok) throw new Error(body.error || '報告失敗')
-      setData((prev) => (prev ? { ...prev, report: body } : prev))
+      const stamped = { ...body, symbols: body.symbols ?? items.map((item) => item.symbol) }
+      writeLocalReport(stamped)
+      setData((prev) => (prev ? { ...prev, report: stamped } : prev))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '報告失敗')
     } finally {
@@ -356,6 +498,7 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
 
   const cards = data?.cards ?? []
   const overlay = data?.overlay ?? []
+  const retail = data?.retail
   const latest = data?.margin.latest
   const keepDelta = overlay.length >= 2 ? overlay[overlay.length - 1].keepRate - overlay[overlay.length - 2].keepRate : null
   const view = data?.report
@@ -390,16 +533,17 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
         <aside className="insight-panel margin-side">
           <div className="insight-head">
             <div>
-              <h2>全市場擔保維持率 × 加權指數</h2>
+              <h2>大盤融資維持率</h2>
               <p className="hint">
                 {data?.margin.error
                   ? data.margin.error
-                  : `${data?.margin.source ?? 'TWSE'} · 近 ${overlay.length} 個交易日 · 加權取證交所收盤`}
+                  : `${data?.margin.source ?? '證交所'} · 近六個月 · 平日 21:30 後更新`}
               </p>
             </div>
             <div className="margin-snapshot">
               <p className="margin-keep">{latest?.keepRate != null ? `${latest.keepRate.toFixed(2)}%` : '—'}</p>
               <p className="hint">
+                {latest?.balance != null ? `融資餘額 ${group(latest.balance, 0)} 億 · ` : ''}
                 {latest?.date || '—'}
                 {keepDelta != null ? ` · 較前日 ${plus(keepDelta, 2)} pt` : ''}
               </p>
@@ -409,7 +553,11 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
           <div className="chart-legend">
             <span className="leg">
               <i style={{ background: KEEP_COLOR }} />
-              全市場擔保維持率 %（左軸）
+              大盤融資維持率 %（左軸）
+            </span>
+            <span className="leg">
+              <i style={{ background: BALANCE_COLOR }} />
+              融資餘額（億元）
             </span>
             <span className="leg">
               <i className="dash" style={{ borderColor: TAIEX_COLOR }} />
@@ -417,6 +565,26 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
             </span>
           </div>
         </aside>
+      </section>
+
+      <section className="insight-panel retail-panel">
+        <div className="insight-head">
+          <div>
+            <h2>微台散戶多空比</h2>
+            <p className="hint">
+              {retail?.error
+                ? retail.error
+                : '期交所 · 全市場未平倉扣掉三大法人 · 平日 16:30 後更新'}
+            </p>
+          </div>
+          <div className="margin-snapshot">
+            <p className="margin-keep" style={{ color: (retail?.latest ?? 0) >= 0 ? LONG_COLOR : SHORT_COLOR }}>
+              {retail?.latest != null ? `${plus(retail.latest, 1)}%` : '—'}
+            </p>
+            <p className="hint">{retail?.date || '—'} · 正值偏多、負值偏空</p>
+          </div>
+        </div>
+        <RetailChart points={retail?.points ?? []} />
       </section>
 
       <section className="insight-panel report-panel">
@@ -482,7 +650,11 @@ export function AnalysisPage({ slots }: { slots: DeskSlots | null }) {
             <Markdown text={view.markdown} />
           </>
         ) : (
-          <p className="hint">按「產生／更新報告」後，會用報價列表（台新即時價與買賣力優先）和上方總經寫一份建議。</p>
+          <p className="hint">
+            {watchCodes().length
+              ? '按「產生／更新報告」後，會用本機報價列表（台新即時價與買賣力優先）和上方總經寫一份建議。'
+              : '本機報價列表是空的。到看盤分頁加入持股後，再按「產生／更新報告」。'}
+          </p>
         )}
       </section>
     </div>

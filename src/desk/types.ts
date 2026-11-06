@@ -169,6 +169,8 @@ export type InsightMetric = {
   tone: InsightTone
   note: string
   source: string
+  /** 這一筆資料本身的日期（YYYY-MM-DD 或 YYYY-MM），用來判斷要不要再抓 */
+  asOf?: string
   /** 景氣燈號用圓點，其餘用膠囊 */
   lamp?: boolean
 }
@@ -179,8 +181,8 @@ export type InsightBar = { label: string; value: number; level: number; tone: In
 export type InsightCard = InsightMetric & {
   kind: 'market' | 'list'
   items?: InsightMetric[]
-  institutions?: { dateLabel: string; items: InsightParty[] }
-  derivatives?: { dateLabel: string; title: string; unit: string; bars: InsightBar[] }
+  institutions?: { date?: string; dateLabel: string; items: InsightParty[] }
+  derivatives?: { date?: string; dateLabel: string; title: string; unit: string; bars: InsightBar[] }
   /** 大盤資料的 ISO 日期（YYYY-MM-DD），給快取換日判斷用 */
   asOf?: string
 }
@@ -188,20 +190,27 @@ export type InsightCard = InsightMetric & {
 export type MarginSnapshot = {
   date: string
   keepRate: number | null
+  /** 融資餘額，億元 */
+  balance: number | null
   callAccNum: number | null
   exeAccNum: number | null
   belowAccNum: number | null
   marginAccRate: number | null
 }
 
-export type OverlayPoint = { date: string; keepRate: number; taiex: number | null }
+export type OverlayPoint = { date: string; keepRate: number; balance: number | null; taiex: number | null }
+
+export type RetailPoint = { date: string; ratio: number }
 
 export type InsightBundle = {
   updatedAt: string
   cards: InsightCard[]
-  margin: { latest: MarginSnapshot | null; label: string; source: string; error?: string }
+  margin: { latest: MarginSnapshot | null; label: string; source: string; basis?: string; error?: string }
   overlay: OverlayPoint[]
+  retail: { latest: number | null; date: string; points: RetailPoint[]; source: string; error?: string }
   errors: string[]
+  /** 每一項已抓到的公布代號。對上最新應公布的代號就不再抓 */
+  releases?: Record<string, string>
 }
 
 export type InsightIdea = {
@@ -222,6 +231,8 @@ export type InsightReport = {
   generatedAt: string
   engine: 'grok' | 'rules'
   model?: string
+  /** 產生時的報價列表代號；換電腦／清空列表後不應再顯示舊報告 */
+  symbols?: string[]
   stance: string
   marketSummary: string
   stockIdeas: InsightIdea[]
