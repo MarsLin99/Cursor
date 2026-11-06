@@ -77,12 +77,33 @@ async function getJson<T>(url: string, headers: Record<string, string> = {}): Pr
   return (await res.json()) as T
 }
 
+const SYMBOL_RE = /^[0-9A-Z]{4,6}$/
+const YAHOO_SKIP = new Set(['T00', 'IX0001', 'IR0001'])
+
+function validFlowSymbol(symbol: string) {
+  const code = symbol.trim().toUpperCase()
+  return SYMBOL_RE.test(code) && !YAHOO_SKIP.has(code) ? code : ''
+}
+
 function watched() {
   const now = Date.now()
   for (const [symbol, row] of seen) if (now - row.at > KEEP_MS) seen.delete(symbol)
+  // Drop corrupt / non-stock keys so one bad symbol cannot 400 the whole Yahoo poll.
+  for (const symbol of Object.keys(samples.markets)) {
+    if (!validFlowSymbol(symbol)) {
+      delete samples.markets[symbol]
+      dirty = true
+    }
+  }
   const out = new Map<string, Market>()
-  for (const [symbol, market] of Object.entries(samples.markets)) out.set(symbol, market)
-  for (const [symbol, row] of seen) out.set(symbol, row.market)
+  for (const [symbol, market] of Object.entries(samples.markets)) {
+    const code = validFlowSymbol(symbol)
+    if (code) out.set(code, market)
+  }
+  for (const [symbol, row] of seen) {
+    const code = validFlowSymbol(symbol)
+    if (code) out.set(code, row.market)
+  }
   return out
 }
 
@@ -91,7 +112,9 @@ export function noteFlowSymbols(items: { symbol: string; market: Market }[]) {
   const now = Date.now()
   let added = false
   for (const raw of items) {
-    const item = { ...raw, symbol: raw.symbol.toUpperCase() }
+    const symbol = validFlowSymbol(String(raw.symbol ?? ''))
+    if (!symbol) continue
+    const item = { symbol, market: raw.market === 'tpex' ? 'tpex' as const : 'twse' as const }
     if (!seen.has(item.symbol)) added = true
     seen.set(item.symbol, { market: item.market, at: now })
     if (samples.markets[item.symbol] !== item.market) {
@@ -237,7 +260,10 @@ type YahooRow = { symbol?: string; outMarket?: unknown; inMarket?: unknown; regu
 async function yahooOnce() {
   const list = watched()
   if (!list.size) return
-  const symbols = [...list].map(([symbol, market]) => `${symbol}.${market === 'tpex' ? 'TWO' : 'TW'}`)
+  const symbols = [...list]
+    .filter(([symbol]) => validFlowSymbol(symbol))
+    .map(([symbol, market]) => `${symbol}.${market === 'tpex' ? 'TWO' : 'TW'}`)
+  if (!symbols.length) return
   const url =
     'https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.stockList;fields=avgPrice%2Corderbook;symbols=' +
     encodeURIComponent(symbols.join(','))
@@ -328,6 +354,12 @@ export async function startFlowSampler(dataDir: string) {
     if (saved && typeof saved === 'object' && saved.flow) yahoo = saved
   } catch {
     /* 第一次啟動 */
+  }
+  for (const symbol of Object.keys(samples.markets)) {
+    if (!validFlowSymbol(symbol)) {
+      delete samples.markets[symbol]
+      dirty = true
+    }
   }
   void yahooLoop()
   void loop(refreshBook, BOOK_GAP_MS)

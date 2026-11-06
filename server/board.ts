@@ -1805,8 +1805,9 @@ export function attachBoard(middlewares: {
           .split(',')
           .map((part) => {
             const [symbol, market] = part.split(':')
-            if (!symbol) return null
-            return { symbol, market: market === 'tpex' ? 'tpex' as const : 'twse' as const }
+            const code = (symbol ?? '').trim().toUpperCase()
+            if (!/^[0-9A-Z]{4,6}$/.test(code)) return null
+            return { symbol: code, market: market === 'tpex' ? 'tpex' as const : 'twse' as const }
           })
           .filter((item): item is { symbol: string; market: 'twse' | 'tpex' } => item != null)
         noteFlowSymbols(items)
