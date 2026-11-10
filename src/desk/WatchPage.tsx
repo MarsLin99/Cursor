@@ -170,7 +170,8 @@ function Spark({
   const xOf = (stamp: string) => xOfMinute(minuteOf(stamp))
 
   const points = book?.points ?? []
-  const band = priceBand(book)
+  const officialBandPrices = officialLimitBand(book)
+  const band = officialBandPrices ?? priceBand(book)
   const lamp = limitLampState(book, book?.price ?? quote?.price ?? null)
   // Y 軸以平盤（昨收，漲跌停就是由它 ±10% 算出）為正中央，上下對稱到漲停／跌停，整天固定；
   // 價格超出（無漲跌幅限制的標的）就壓在邊上，不再隨走勢縮放
@@ -211,11 +212,12 @@ function Spark({
   const todayTpe = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })
   const staleDate = book?.forceDate && book.forceDate !== todayTpe ? book.forceDate.slice(5).replace('-', '/') : null
 
+  // 漲跌停線只用已鎖定的官方價格；暫時 ±10% 框只拿來撐 Y 軸，避免線在來源切換時跳動
   const markers = (
     [
-      { price: band?.up ?? null, label: '漲停', cls: 'up' },
+      { price: officialBandPrices?.up ?? null, label: '漲停', cls: 'up' },
       { price: center, label: '平盤', cls: 'open' },
-      { price: band?.down ?? null, label: '跌停', cls: 'down' },
+      { price: officialBandPrices?.down ?? null, label: '跌停', cls: 'down' },
     ] as { price: number | null; label: string; cls: string }[]
   ).filter((mark): mark is { price: number; label: string; cls: string } => ready && mark.price != null && Number.isFinite(mark.price))
 

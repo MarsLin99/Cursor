@@ -25,6 +25,7 @@ const trumpZhFile = path.join(dataDir, 'trump-zh.json')
 const tickerFile = path.join(dataDir, 'ticker-cache.json')
 const sparkLiveFile = path.join(dataDir, 'spark-live.json')
 const sparkWatchFile = path.join(dataDir, 'spark-watch.json')
+const dayRefFile = path.join(dataDir, 'day-references.json')
 
 const SLOTS = ['08:40', '14:00', '15:10', '21:00']
 const UA = 'Mozilla/5.0 (compatible; TaHedgeLab/1.0)'
@@ -1388,10 +1389,100 @@ async function externalDay(symbol: string, market: 'twse' | 'tpex') {
 /** 13:25 起收盤集合競價（試撮），這段不算買賣力 */
 const CLOSE_AUCTION = 13 * 60 + 25
 
-type DayReference = { date: string; prev: number | null; limitUp: number | null; limitDown: number | null; official: boolean; open: number | null }
+type DayReference = {
+  date: string
+  prev: number | null
+  limitUp: number | null
+  limitDown: number | null
+  official: boolean
+  open: number | null
+  /** mis＝證交所官方 u/w，鎖定後整天不變；vendor／computed 可被 MIS 一次性覆寫 */
+  source?: 'mis' | 'vendor' | 'computed'
+}
 
-/** 每檔每個交易日鎖住一次的參考價：昨收、漲停、跌停、開盤，之後來源切換（台新／鉅亨）也不會變 */
+type OfficialRef = {
+  date: string
+  prev: number | null
+  limitUp: number | null
+  limitDown: number | null
+  open: number | null
+}
+
+/** 每檔每個交易日鎖住一次的參考價：昨收、漲停、跌停、開盤。寫入 data/ 以免部署重啟後重算亂跳。 */
 const dayReferences = new Map<string, DayReference>()
+const officialRefCache = new Map<string, { at: number; value: OfficialRef | null }>()
+let dayRefLoaded = false
+let dayRefSaveTimer: NodeJS.Timeout | null = null
+
+function normalizeSessionDate(raw: string) {
+  const text = raw.trim()
+  if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`
+  return text
+}
+
+async function loadDayReferences() {
+  if (dayRefLoaded) return
+  dayRefLoaded = true
+  const today = taipeiDate()
+  const saved = await readJson<Record<string, DayReference>>(dayRefFile)
+  if (!saved) return
+  for (const [symbol, ref] of Object.entries(saved)) {
+    if (ref?.date === today) dayReferences.set(symbol, ref)
+  }
+}
+
+function scheduleSaveDayReferences() {
+  if (dayRefSaveTimer) return
+  dayRefSaveTimer = setTimeout(() => {
+    dayRefSaveTimer = null
+    const today = taipeiDate()
+    const out: Record<string, DayReference> = {}
+    for (const [symbol, ref] of dayReferences) if (ref.date === today) out[symbol] = ref
+    void writeJson(dayRefFile, out)
+  }, 250)
+  dayRefSaveTimer.unref?.()
+}
+
+async function fetchOfficialRef(symbol: string, market: 'twse' | 'tpex'): Promise<OfficialRef | null> {
+  const today = taipeiDate()
+  const cached = officialRefCache.get(symbol)
+  if (cached && cached.value?.date === today && Date.now() - cached.at < 10 * 60_000) return cached.value
+  const order: Array<'twse' | 'tpex'> = market === 'tpex' ? ['tpex', 'twse'] : ['twse', 'tpex']
+  for (const item of order) {
+    try {
+      const url =
+        `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${quoteChannel(symbol, item)}` +
+        `&json=1&delay=0&_=${Date.now()}`
+      const res = await fetch(url, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
+        headers: { 'User-Agent': UA, Referer: 'https://mis.twse.com.tw/stock/index.jsp' },
+      })
+      if (!res.ok) continue
+      const json = (await res.json()) as { msgArray?: Record<string, string>[] }
+      const row = (json.msgArray ?? []).find((item) => String(item.c ?? '').toUpperCase() === symbol.toUpperCase())
+      if (!row) continue
+      const prev = num(row.y)
+      const limitUp = num(row.u)
+      const limitDown = num(row.w)
+      const open = num(row.o)
+      if ((prev == null || prev <= 0) && limitUp == null) continue
+      const value: OfficialRef = {
+        date: normalizeSessionDate(row.d ?? today),
+        prev: prev != null && prev > 0 ? prev : null,
+        limitUp,
+        limitDown,
+        open: open != null && open > 0 ? open : null,
+      }
+      officialRefCache.set(symbol, { at: Date.now(), value })
+      return value
+    } catch {
+      /* 換市場再試 */
+    }
+  }
+  officialRefCache.set(symbol, { at: Date.now(), value: cached?.value ?? null })
+  return cached?.value ?? null
+}
 
 let lastSparkLive: SparkLiveFile | null = null
 
@@ -1426,64 +1517,89 @@ function dayReference(
   symbol: string,
   date: string,
   seen: { prev: number | null; limitUp: number | null; limitDown: number | null; open: number | null },
+  official: OfficialRef | null = null,
 ): DayReference {
+  const session = normalizeSessionDate(date)
+  // 指數沒有漲跌停，線不要畫，也不要用 ±10% 冒充
+  if (isIndexSymbol(symbol)) {
+    const prev = official?.prev ?? seen.prev ?? null
+    const open = official?.open ?? seen.open ?? null
+    const ref: DayReference = {
+      date: session,
+      prev: prev != null && prev > 0 ? prev : null,
+      limitUp: null,
+      limitDown: null,
+      official: true,
+      open: open != null && open > 0 ? open : null,
+      source: official?.prev != null ? 'mis' : undefined,
+    }
+    if (session) {
+      dayReferences.set(symbol, ref)
+      scheduleSaveDayReferences()
+    }
+    return ref
+  }
   const old = dayReferences.get(symbol)
   const ref: DayReference =
-    old && old.date === date ? { ...old } : { date, prev: null, limitUp: null, limitDown: null, official: false, open: null }
-  // 換日或尚未鎖定：寫入昨收。若之後拿到與官方漲跌停吻合的更好昨收，允許修正（避免隔夜鎖到舊參考價）
-  if (seen.prev != null && seen.prev > 0) {
-    if (ref.prev == null) ref.prev = seen.prev
-    else if (
-      ref.prev !== seen.prev &&
-      officialBand(seen.prev, seen.limitUp, seen.limitDown) &&
-      (!ref.official || !officialBand(ref.prev, ref.limitUp, ref.limitDown) || Math.abs(ref.prev - seen.prev) / seen.prev > 0.001)
-    ) {
-      ref.prev = seen.prev
-      ref.official = false
-      ref.limitUp = null
-      ref.limitDown = null
+    old && old.date === session
+      ? { ...old }
+      : { date: session, prev: null, limitUp: null, limitDown: null, official: false, open: null }
+  const officialPrev = official?.date === session ? official.prev : null
+  const officialUp = official?.date === session ? official.limitUp : null
+  const officialDown = official?.date === session ? official.limitDown : null
+
+  if (officialPrev != null && officialPrev > 0) ref.prev = officialPrev
+  else if (ref.prev == null && seen.prev != null && seen.prev > 0) ref.prev = seen.prev
+
+  if (officialUp != null && officialDown != null) {
+    // 證交所官方 u/w：可把稍早鎖錯的台新／估價一次性改正，之後整天不再改
+    ref.limitUp = officialUp
+    ref.limitDown = officialDown
+    ref.official = true
+    ref.source = 'mis'
+  } else if (ref.source !== 'mis') {
+    if (ref.limitUp == null || ref.limitDown == null) {
+      if (officialBand(ref.prev ?? seen.prev, seen.limitUp, seen.limitDown)) {
+        ref.limitUp = seen.limitUp
+        ref.limitDown = seen.limitDown
+        ref.source = 'vendor'
+      } else if (ref.prev != null) {
+        // 漲停往下取檔、跌停往上取檔（不超出 ±10% 暫估；實際幅度以 MIS 為準）
+        ref.limitUp = roundToTick(ref.prev * 1.1, -1)
+        ref.limitDown = roundToTick(ref.prev * 0.9, 1)
+        ref.source = 'computed'
+      }
     }
   }
-  if (!ref.official) {
-    if (officialBand(ref.prev, seen.limitUp, seen.limitDown)) {
-      ref.limitUp = seen.limitUp
-      ref.limitDown = seen.limitDown
-      ref.official = true
-    } else if (ref.prev != null && ref.limitUp == null) {
-      ref.limitUp = roundToTick(ref.prev * 1.1, 1)
-      ref.limitDown = roundToTick(ref.prev * 0.9, -1)
-    }
-  } else if (
-    seen.limitUp != null &&
-    seen.limitDown != null &&
-    officialBand(ref.prev, seen.limitUp, seen.limitDown) &&
-    (ref.limitUp !== seen.limitUp || ref.limitDown !== seen.limitDown)
-  ) {
-    ref.limitUp = seen.limitUp
-    ref.limitDown = seen.limitDown
-  }
-  if (seen.open != null && seen.open > 0) {
-    if (ref.open == null) ref.open = seen.open
+
+  const seenOpen = official?.date === session && official.open != null ? official.open : seen.open
+  if (seenOpen != null && seenOpen > 0) {
+    if (ref.open == null) ref.open = seenOpen
     else if (
-      ref.open !== seen.open &&
-      seen.prev != null &&
-      Math.abs(seen.open - seen.prev) > Math.abs(ref.open - seen.prev)
+      ref.open !== seenOpen &&
+      ref.prev != null &&
+      Math.abs(seenOpen - ref.prev) > Math.abs(ref.open - ref.prev)
     ) {
       // 舊 open 貼近昨收、新 open 才是真正開盤（常見於隔夜殘留昨日開盤）
-      ref.open = seen.open
+      ref.open = seenOpen
     }
   }
-  if (date) dayReferences.set(symbol, ref)
+  if (session) {
+    dayReferences.set(symbol, ref)
+    scheduleSaveDayReferences()
+  }
   return ref
 }
 
-function buildSpark(
+async function buildSpark(
   symbol: string,
   live: LiveSparkBook | undefined,
   liveDate: string,
   ext: ExternalDay | null,
-): SparkBook | null {
+  market: 'twse' | 'tpex' = 'twse',
+): Promise<SparkBook | null> {
   const today = taipeiDate()
+  const official = await fetchOfficialRef(symbol, market).catch(() => null)
   const liveToday = live != null && (liveDate === today || liveDate === today.replace(/-/g, ''))
   const livePoints = liveToday
     ? (live.points ?? []).filter((point) => inSparkSession(stampMinute(point.t)))
@@ -1560,12 +1676,17 @@ function buildSpark(
   const lastPoint = points.at(-1)
   // 參考價／漲跌停：鉅亨（證交所同源）優先；台新 bridge 隔夜可能鎖到舊昨收／舊開盤
   const openFromBars = extBars[0] && extBars[0].m <= SPARK_OPEN + 5 ? extBars[0].o : null
-  const ref = dayReference(symbol, sessionDate, {
-    prev: q?.prev ?? meta?.prev ?? null,
-    limitUp: q?.limitUp ?? meta?.limitUp ?? null,
-    limitDown: q?.limitDown ?? meta?.limitDown ?? null,
-    open: openFromBars ?? meta?.open ?? livePoints[0]?.p ?? null,
-  })
+  const ref = dayReference(
+    symbol,
+    sessionDate,
+    {
+      prev: official?.prev ?? q?.prev ?? meta?.prev ?? null,
+      limitUp: official?.limitUp ?? q?.limitUp ?? meta?.limitUp ?? null,
+      limitDown: official?.limitDown ?? q?.limitDown ?? meta?.limitDown ?? null,
+      open: official?.open ?? openFromBars ?? meta?.open ?? livePoints[0]?.p ?? null,
+    },
+    official && official.date === normalizeSessionDate(sessionDate) ? official : null,
+  )
   return {
     symbol,
     name: live?.name || q?.name || symbol,
@@ -1810,6 +1931,7 @@ export function attachBoard(middlewares: {
       memory = await readJson<CacheShape>(macroFile)
       reportMemory = await readJson<DeskReport>(reportFile)
       tickerMemory = await readJson<TickerCache>(tickerFile)
+      await loadDayReferences()
       if (stale(memory)) void scanMacro()
       maybeRefreshTicker()
       maybeRefreshSectors()
@@ -1869,9 +1991,10 @@ export function attachBoard(middlewares: {
           wanted.map(async (item) =>
             buildSpark(
               item.symbol,
-              live[item.symbol],
+              liveBook(live, item.symbol) as LiveSparkBook | undefined,
               saved?.date ?? '',
               await externalDay(item.symbol, item.market).catch(() => null),
+              item.market,
             ),
           ),
         )
