@@ -890,6 +890,47 @@
   position: relative;
 }
 
+/* 走勢圖右上角：漲停紅燈／跌停綠燈（台股慣例） */
+.spark-plot .limit-lamp {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 3;
+  pointer-events: none;
+  padding: 3px 11px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.35;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.spark-plot .limit-lamp.up {
+  background: linear-gradient(180deg, #e07060 0%, #c45c4a 100%);
+  box-shadow:
+    0 0 0 1px rgba(196, 92, 74, 0.55),
+    0 0 14px rgba(196, 92, 74, 0.95),
+    0 0 28px rgba(196, 92, 74, 0.45);
+  animation: limit-lamp-pulse-up 1.15s ease-in-out infinite alternate;
+}
+.spark-plot .limit-lamp.down {
+  background: linear-gradient(180deg, #2a9a88 0%, #1f7a6c 100%);
+  box-shadow:
+    0 0 0 1px rgba(31, 122, 108, 0.55),
+    0 0 14px rgba(31, 122, 108, 0.95),
+    0 0 28px rgba(31, 122, 108, 0.45);
+  animation: limit-lamp-pulse-down 1.15s ease-in-out infinite alternate;
+}
+@keyframes limit-lamp-pulse-up {
+  from { filter: brightness(1); box-shadow: 0 0 0 1px rgba(196, 92, 74, 0.55), 0 0 10px rgba(196, 92, 74, 0.7), 0 0 18px rgba(196, 92, 74, 0.3); }
+  to { filter: brightness(1.12); box-shadow: 0 0 0 1px rgba(196, 92, 74, 0.7), 0 0 18px rgba(196, 92, 74, 1), 0 0 36px rgba(196, 92, 74, 0.55); }
+}
+@keyframes limit-lamp-pulse-down {
+  from { filter: brightness(1); box-shadow: 0 0 0 1px rgba(31, 122, 108, 0.55), 0 0 10px rgba(31, 122, 108, 0.7), 0 0 18px rgba(31, 122, 108, 0.3); }
+  to { filter: brightness(1.12); box-shadow: 0 0 0 1px rgba(31, 122, 108, 0.7), 0 0 18px rgba(31, 122, 108, 1), 0 0 36px rgba(31, 122, 108, 0.55); }
+}
+
 .spark-card svg {
   width: 100%;
   height: 320px;

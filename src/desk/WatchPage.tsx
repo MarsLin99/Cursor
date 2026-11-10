@@ -31,19 +31,36 @@ const CHART_H = 320
 const PAD = { l: 72, r: 12, t: 8, b: 18 }
 const AXIS_MARKS = [9 * 60, 10 * 60, 11 * 60, 12 * 60, 13 * 60, SESSION_END]
 
-function priceBand(book?: SparkBook) {
+/** 有官方漲跌停才回傳；指數／無漲跌幅限制標的為 null（不當假 ±10% 亮燈） */
+function officialLimitBand(book?: SparkBook) {
   const prev = book?.prev
   const up = book?.limitUp
   const down = book?.limitDown
-  if (up != null && down != null && prev != null && prev > 0) {
-    const high = up / prev
-    const low = down / prev
-    if (high >= 1.02 && high <= 1.35 && low >= 0.65 && low <= 0.98) return { up, down }
-  }
-  const anchor = prev ?? book?.open ?? book?.price
+  if (up == null || down == null || prev == null || prev <= 0) return null
+  const high = up / prev
+  const low = down / prev
+  if (high >= 1.02 && high <= 1.35 && low >= 0.65 && low <= 0.98) return { up, down }
+  return null
+}
+
+function priceBand(book?: SparkBook) {
+  const official = officialLimitBand(book)
+  if (official) return official
+  const anchor = book?.prev ?? book?.open ?? book?.price
   if (anchor == null || anchor <= 0) return null
   // 後端已鎖定昨收與漲跌停；這裡只是還沒拿到資料時的暫時框
   return { up: anchor * 1.1, down: anchor * 0.9 }
+}
+
+/** 現價是否貼齊漲停／跌停（容許半個最小跳動）。無官方漲跌停不亮燈。 */
+function limitLampState(book: SparkBook | undefined, price: number | null): 'up' | 'down' | null {
+  const band = officialLimitBand(book)
+  if (!band || price == null || !Number.isFinite(price)) return null
+  const span = Math.max(band.up - band.down, 0)
+  const eps = Math.max(0.005, span * 1e-6)
+  if (price >= band.up - eps) return 'up'
+  if (price <= band.down + eps) return 'down'
+  return null
 }
 
 function minuteOf(stamp: string) {
@@ -154,6 +171,7 @@ function Spark({
 
   const points = book?.points ?? []
   const band = priceBand(book)
+  const lamp = limitLampState(book, book?.price ?? quote?.price ?? null)
   // Y 軸以平盤（昨收，漲跌停就是由它 ±10% 算出）為正中央，上下對稱到漲停／跌停，整天固定；
   // 價格超出（無漲跌幅限制的標的）就壓在邊上，不再隨走勢縮放
   const firstPrice = points[0]?.p ?? null
@@ -258,6 +276,11 @@ function Spark({
         </div>
       </header>
       <div className="spark-plot">
+        {lamp ? (
+          <div className={`limit-lamp ${lamp}`} role="status" aria-live="polite">
+            {lamp === 'up' ? '漲停' : '跌停'}
+          </div>
+        ) : null}
         <svg
           ref={svgRef}
           viewBox={`0 0 ${width} ${height}`}
