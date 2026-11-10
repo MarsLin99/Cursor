@@ -1139,9 +1139,10 @@ const JOBS: Job[] = [
   },
   {
     id: 'institutions',
-    retryMs: HALF_HOUR,
-    tries: 4,
-    due: (now) => latestClock('Asia/Taipei', '16:00', now),
+    // 證交所三大法人通常 15:00 前後公布；每 8 分鐘重試直到抓到當日，再停止
+    retryMs: 8 * 60 * 1000,
+    tries: 36,
+    due: (now) => latestClock('Asia/Taipei', '15:00', now),
     read: (bundle, due) => {
       const card = bundle.cards.find((row) => row.id === 'market')
       if (card?.institutions?.date) return card.institutions.date
