@@ -105,6 +105,7 @@ export default function App({ slots = null }: { slots?: DeskSlots | null }) {
   const [started, setStarted] = useState(false)
   const [debrief, setDebrief] = useState<string | null>(null)
   const [options, setOptions] = useState<OptionPosition[]>([])
+  const [guideOpen, setGuideOpen] = useState(false)
 
   const trade = usePaperTrade()
   const timerRef = useRef<number | null>(null)
@@ -320,6 +321,20 @@ export default function App({ slots = null }: { slots?: DeskSlots | null }) {
     void load('2330')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 每次切到走圖道場分頁就顯示操作說明（slots 有值代表此分頁正在顯示）
+  useEffect(() => {
+    if (slots) setGuideOpen(true)
+  }, [slots])
+
+  useEffect(() => {
+    if (!guideOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGuideOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [guideOpen])
 
   useEffect(() => {
     const query = symbolInput.trim()
@@ -1185,6 +1200,35 @@ export default function App({ slots = null }: { slots?: DeskSlots | null }) {
           </section>
         </aside>
       </main>
+
+      {guideOpen && slots ? (
+        <div
+          className="modal-backdrop guide-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="dojo-guide-title"
+          onClick={() => setGuideOpen(false)}
+        >
+          <div className="modal-card guide-card" onClick={(e) => e.stopPropagation()}>
+            <h2 id="dojo-guide-title">操作說明</h2>
+            <p className="guide-lead">用真實日 K 練習買賣，圖會一根一根往前走。</p>
+            <ol className="guide-steps">
+              <li>輸入股票代號或名稱，按「開始練習」。</li>
+              <li>要改練習起點，先選日期再按「從此開始」（帳戶會重置）。</li>
+              <li>按「播放走圖」或「上一根／下一根」來看圖，速度可以調。</li>
+              <li>右側選張數，按「買進」或「放空」下單（以當根收盤價成交）。</li>
+              <li>遇到突發事件會暫停，選完策略按「確認下單」；選擇權要自己按「平倉」。</li>
+            </ol>
+            <button
+              type="button"
+              className="primary confirm-choice"
+              onClick={() => setGuideOpen(false)}
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {pendingEvent && last && (
         <EventModal

@@ -842,3 +842,30 @@
     flex-direction: column;
   }
 }
+
+.guide-backdrop {
+  z-index: 60;
+}
+
+.guide-card h2 {
+  margin: 0;
+  font-family: 'Noto Serif TC', serif;
+  font-size: 1.45rem;
+}
+
+.guide-lead {
+  margin: 0.4rem 0 0.9rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.guide-steps {
+  margin: 0 0 1.15rem;
+  padding-left: 1.25rem;
+  line-height: 1.7;
+  font-size: 0.98rem;
+}
+
+.guide-steps li + li {
+  margin-top: 0.35rem;
+}
