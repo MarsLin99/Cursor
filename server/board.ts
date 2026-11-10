@@ -268,6 +268,8 @@ async function fetchMisSectors(): Promise<{
   time: string
   sectors: CacheShape['sectors']
   index: CacheShape['index'] | null
+  /** 證交所官方昨收（欄位 y）；開盤前 z 為 '-' 時仍要拿到，避免沿用台新隔夜舊參考價 */
+  prev: number | null
 }> {
   const url =
     'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=' +
@@ -283,6 +285,7 @@ async function fetchMisSectors(): Promise<{
   let date = ''
   let time = ''
   let index: CacheShape['index'] | null = null
+  let indexPrev: number | null = null
   const sectors = (json.msgArray ?? []).flatMap((row) => {
     const code = String(row.c ?? '')
     const price = row.z && row.z !== '-' ? num(row.z) : null
@@ -290,6 +293,7 @@ async function fetchMisSectors(): Promise<{
     if ((row.d ?? '') > date) date = row.d ?? ''
     if ((row.t ?? '') > time) time = row.t ?? ''
     if (code === 't00') {
+      if (prev != null && prev > 0) indexPrev = prev
       if (price != null && prev != null && prev > 0) {
         const change = price - prev
         index = {
@@ -313,7 +317,7 @@ async function fetchMisSectors(): Promise<{
       },
     ]
   })
-  return { date, time, sectors, index }
+  return { date, time, sectors, index, prev: indexPrev }
 }
 
 function twSession(now = new Date()) {
@@ -339,31 +343,27 @@ async function refreshSectors() {
     if (!pack.sectors.length) return
     const base = memory ?? (await readJson<CacheShape>(macroFile)) ?? emptySnapshot()
     const liveIndex = live?.index
-    // 加權指數：台新 spark-live t00 優先，其次 MIS t00（已帶 Referer），都沒有才沿用快取
+    const officialPrev =
+      live?.prev ??
+      (liveIndex?.price != null && liveIndex.change != null ? liveIndex.price - liveIndex.change : null)
+    // 加權指數：現價台新 spark-live t00 優先，昨收一定用證交所官方（台新 referencePrice 隔夜常殘留舊值）
     const spark = await readSparkLive().catch(() => ({} as Record<string, SparkBook>))
     const tsBook = liveBook(spark, 't00')
-    let indexFromTs: CacheShape['index'] | null = null
-    if (tsBook?.price != null && (tsBook.prev ?? 0) > 0) {
-      const prev = tsBook.prev as number
-      const change = tsBook.price - prev
-      indexFromTs = {
-        price: tsBook.price,
-        change,
-        pct: Math.round((change / prev) * 10000) / 100,
-        date: pack.date || base.index.date,
-        time: tsBook.time || pack.time,
-      }
-    }
+    const indexFromLive = composeIndex(
+      tsBook?.price ?? liveIndex?.price ?? null,
+      officialPrev,
+      pack.date || liveIndex?.date || base.index.date,
+      tsBook?.time || liveIndex?.time || pack.time,
+    )
     memory = {
       ...base,
       sectors: pack.sectors,
       sectorsAt: new Date().toISOString(),
       sectorsTime: pack.time,
       flowUpdated,
-      index: indexFromTs
-        ?? (liveIndex?.price != null
-          ? liveIndex
-          : { ...base.index, date: pack.date || base.index.date }),
+      index: indexFromLive
+        ?? liveIndex
+        ?? { ...base.index, date: pack.date || base.index.date },
     }
     await writeJson(macroFile, memory)
     flowAt = Date.now()
@@ -803,7 +803,7 @@ function parseMis(row: Record<string, string>, market: 'twse' | 'tpex'): QuoteRo
   const bid = num(String(row.b ?? '').split('_')[0])
   const ask = num(String(row.a ?? '').split('_')[0])
   return {
-    symbol: row.c,
+    symbol: isIndexSymbol(row.c) ? 't00' : row.c,
     name: row.n,
     market,
     price: usable,
@@ -834,9 +834,9 @@ export async function fetchQuotes(
   })
   if (!misRes.ok) throw new Error(`${misRes.status} mis quotes`)
   const json = (await misRes.json()) as { msgArray?: Record<string, string>[] }
-  const byCode = new Map((json.msgArray ?? []).map((row) => [row.c, row]))
+  const byCode = new Map((json.msgArray ?? []).map((row) => [String(row.c ?? '').toUpperCase(), row]))
   return items.map((item) => {
-    const row = byCode.get(item.symbol)
+    const row = byCode.get(item.symbol.toUpperCase())
     if (!row) {
       return {
         symbol: item.symbol,
@@ -920,13 +920,44 @@ async function taishinLiveStatus() {
   }
 }
 
+function isIndexSymbol(symbol: string) {
+  const upper = symbol.trim().toUpperCase()
+  return INDEX_KEYS.some((key) => key.toUpperCase() === upper)
+}
+
+function composeIndex(
+  price: number | null | undefined,
+  prev: number | null | undefined,
+  date: string,
+  time: string,
+): CacheShape['index'] | null {
+  if (price == null || prev == null || prev <= 0) return null
+  const change = price - prev
+  return {
+    price,
+    change,
+    pct: Math.round((change / prev) * 10000) / 100,
+    date,
+    time,
+  }
+}
+
+/** 加權 t00／IX0001 一律正規成 t00；個股維持 4–6 碼。看盤標題請求 t00，不可被 4 碼規則丟掉。 */
+function parseBoardItem(part: string): { symbol: string; market: 'twse' | 'tpex' } | null {
+  const [symbol, market] = part.split(':')
+  const raw = (symbol ?? '').trim()
+  if (!raw) return null
+  const code = isIndexSymbol(raw) ? 't00' : raw.toUpperCase()
+  if (code !== 't00' && !/^[0-9A-Z]{4,6}$/.test(code)) return null
+  return { symbol: code, market: (market ?? '').trim().toLowerCase() === 'tpex' ? 'tpex' : 'twse' }
+}
+
 function sparkItems(raw: string) {
   const seen = new Map<string, 'twse' | 'tpex'>()
   for (const part of raw.split(',')) {
-    const [code, market] = part.split(':')
-    const symbol = (code ?? '').trim().toUpperCase()
-    if (!/^[0-9A-Z]{4,6}$/.test(symbol) || seen.has(symbol)) continue
-    seen.set(symbol, (market ?? '').trim().toLowerCase() === 'tpex' ? 'tpex' : 'twse')
+    const item = parseBoardItem(part)
+    if (!item || seen.has(item.symbol)) continue
+    seen.set(item.symbol, item.market)
   }
   return [...seen].map(([symbol, market]) => ({ symbol, market }))
 }
@@ -962,7 +993,8 @@ function overlaySpark(rows: QuoteRow[], live: Record<string, SparkBook>) {
     const book = liveBook(live, row.symbol)
     if (!book || book.price == null) return row
     // 昨收／開盤：證交所 MIS 優先（台新 bridge 隔夜可能殘留舊值）
-    const prev = row.prev ?? book.prev
+    // 加權指數昨收不用台新 referencePrice，只信證交所／Yahoo
+    const prev = row.prev ?? (isIndexSymbol(row.symbol) ? null : book.prev)
     const open = row.open ?? book.open
     const change = prev != null ? book.price - prev : row.change
     return {
@@ -1010,11 +1042,28 @@ async function fetchQuotesPreferTaishin(
   let base = items.map((item) => bySymbol.get(item.symbol) ?? blank(item))
   // overlaySpark：有台新現價就覆寫（含 t00／IX0001）
   base = overlaySpark(base, live)
-  // 加權指數順位：台新 spark-live t00 → MIS t00 → Yahoo ^TWII
-  if (base.some((row) => row.symbol === 't00' && row.price == null)) {
+  // 加權指數順位：現價台新 → 證交所昨收；缺現價或昨收時才補 Yahoo ^TWII
+  if (base.some((row) => row.symbol === 't00' && (row.price == null || row.prev == null))) {
     const twii = await fetchYahooTwii().catch(() => null)
     if (twii) {
-      base = base.map((row) => (row.symbol === 't00' ? { ...row, ...twii, symbol: 't00', market: row.market } : row))
+      base = base.map((row) => {
+        if (row.symbol !== 't00') return row
+        const price = row.price ?? twii.price ?? null
+        const prev = row.prev ?? twii.prev ?? null
+        const change = price != null && prev != null ? price - prev : row.change ?? twii.change ?? null
+        return {
+          ...row,
+          ...twii,
+          symbol: 't00',
+          market: row.market,
+          name: row.name || twii.name || '發行量加權股價指數',
+          price,
+          prev,
+          change,
+          pct: change != null && prev ? (change / prev) * 100 : row.pct ?? twii.pct ?? null,
+          time: row.time || twii.time || '',
+        }
+      })
     }
   }
   return base
@@ -1800,18 +1849,9 @@ export function attachBoard(middlewares: {
         return
       }
       if (url.pathname === '/api/board/quotes' && req.method === 'GET') {
-        const raw = url.searchParams.get('items') ?? ''
-        const items = raw
-          .split(',')
-          .map((part) => {
-            const [symbol, market] = part.split(':')
-            const code = (symbol ?? '').trim().toUpperCase()
-            if (!/^[0-9A-Z]{4,6}$/.test(code)) return null
-            return { symbol: code, market: market === 'tpex' ? 'tpex' as const : 'twse' as const }
-          })
-          .filter((item): item is { symbol: string; market: 'twse' | 'tpex' } => item != null)
+        const items = sparkItems(url.searchParams.get('items') ?? '')
         noteFlowSymbols(items)
-        await rememberSparkWatch(items.map((item) => item.symbol.toUpperCase()).filter((symbol) => /^[0-9A-Z]{4,6}$/.test(symbol)))
+        await rememberSparkWatch(items.map((item) => item.symbol))
         send(res, 200, await fetchQuotesPreferTaishin(items))
         return
       }
